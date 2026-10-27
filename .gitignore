@@ -1,0 +1,62 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# generated native folders (Expo creates these from app.json when building)
+/ios
+/android
+
+# Native build output and downloaded app files
+.kotlin/
+*.orig.*
+*.apk
+*.aab
+*.ipa
+
+# Signing keys and credentials: never commit these
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.pem
+*.mobileprovision
+credentials.json
+google-services.json
+GoogleService-Info.plist
+
+# Environment files (may contain secrets)
+.env
+.env.*
+!.env.example
+
+# Metro
+.metro-health-check*
+
+# Logs and debug files
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Test coverage
+coverage/
+
+# TypeScript (not used, kept for tooling)
+*.tsbuildinfo
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+
+# Claude Code: personal settings stay local (shared settings.json is committed)
+.claude/settings.local.json

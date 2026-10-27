@@ -1,0 +1,21 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Lets the app show its own "Payment detected" alert (Android 13+ asks the user first). -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+  <application>
+    <!--
+      Android only lets a notification listener run after the user switches it
+      on in Settings > Notification access. BIND_NOTIFICATION_LISTENER_SERVICE
+      means only the Android system itself can connect to this service.
+    -->
+    <service
+      android:name="expo.modules.upinotificationlistener.PaymentNotificationListenerService"
+      android:label="Expense Tracker payment detection"
+      android:exported="true"
+      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+      <intent-filter>
+        <action android:name="android.service.notification.NotificationListenerService" />
+      </intent-filter>
+    </service>
+  </application>
+</manifest>
