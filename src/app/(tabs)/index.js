@@ -9,6 +9,7 @@ import { Amount } from '../../components/Amount';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { CategoryBreakdown } from '../../components/CategoryBreakdown';
+import { LoanSummaryBar } from '../../components/LoanSummaryBar';
 import { MonthSelector } from '../../components/MonthSelector';
 import { NoticeBar } from '../../components/NoticeBar';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
@@ -16,7 +17,7 @@ import { TemplateBar } from '../../components/TemplateBar';
 import { TransactionRow } from '../../components/TransactionRow';
 import { colors, fontSize, spacing } from '../../constants/theme';
 import { countPendingDetected } from '../../db/detected';
-import { getDashboardData } from '../../db/reports';
+import { getDashboardData, getLoanBalances } from '../../db/reports';
 import { listTemplates } from '../../db/templates';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
 import { syncDetectedPayments } from '../../services/detection';
@@ -34,12 +35,13 @@ export default function DashboardScreen() {
   const loader = useCallback(async () => {
     // Pick up payments captured while the app was closed before reading totals.
     await syncDetectedPayments(db);
-    const [dashboard, templates, pendingCount] = await Promise.all([
+    const [dashboard, templates, pendingCount, loans] = await Promise.all([
       getDashboardData(db, monthKey),
       listTemplates(db),
       countPendingDetected(db),
+      getLoanBalances(db),
     ]);
-    return { ...dashboard, templates, pendingCount };
+    return { ...dashboard, templates, pendingCount, loans };
   }, [db, monthKey]);
   const { data, error, reload } = useFocusQuery(loader);
 
@@ -93,6 +95,12 @@ export default function DashboardScreen() {
           {data.templates.length > 0 ? (
             <TemplateBar title="Quick add" templates={data.templates} onApply={addFromTemplate} />
           ) : null}
+
+          <LoanSummaryBar
+            owedToYouPaise={data.loans.owedToYouPaise}
+            youOwePaise={data.loans.youOwePaise}
+            onPress={() => router.push('/loans')}
+          />
 
           {data.missingPurposeCount > 0 ? (
             <NoticeBar

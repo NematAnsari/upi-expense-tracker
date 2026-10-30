@@ -27,6 +27,15 @@ class UpiNotificationListenerModule : Module() {
     }
 
     /**
+     * Asks Android to (re)connect the listener. Safe to call often. Fixes
+     * detection silently stopping after an app update or battery saving.
+     */
+    Function("reconnectListener") {
+      val component = ComponentName(context, PaymentNotificationListenerService::class.java)
+      android.service.notification.NotificationListenerService.requestRebind(component)
+    }
+
+    /**
      * True when battery saving will not stop the app in the background
      * (OnePlus: Battery set to "Unrestricted").
      */

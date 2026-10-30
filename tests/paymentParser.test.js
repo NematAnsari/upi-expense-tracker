@@ -113,6 +113,57 @@ test('Google Pay "You paid ... to NAME" is money spent (made-up example)', () =>
   assert.equal(result.counterparty, 'TEST SHOP');
 });
 
+// The next four use the common public formats of these banks' UPI alerts, with
+// made-up numbers and names. Real messages from your phone may differ slightly.
+
+test('Bank of Baroda "Dr." / "Cr." debit is understood', () => {
+  const result = parsePaymentNotification({
+    title: 'BP-BOBTXN-S',
+    text: 'Rs.250.00 Dr. from A/C XXXXXX4444 and Cr. to test.shop@ybl. Ref:600000000030. AvlBal:Rs1200.50(2026:10:28 10:15:00). Not you? Call 18000000000 -BOB',
+  });
+  assert.equal(result.direction, 'debit');
+  assert.equal(result.amountPaise, 25000, 'the balance is not mistaken for the amount');
+  assert.equal(result.bankName, 'Bank of Baroda');
+  assert.equal(result.accountLast4, '4444');
+  assert.equal(result.counterparty, 'test.shop@ybl');
+  assert.equal(result.reference, '600000000030');
+});
+
+test('Bank of Baroda credit "thru UPI/<ref> by <UPI ID>" is understood', () => {
+  const result = parsePaymentNotification({
+    title: 'BP-BOBSMS-S',
+    text: 'Rs.500.00 Credited to A/c ...4444 thru UPI/600000000031 by friend@okaxis. Total Bal:Rs.1700.50 CR. -BOB',
+  });
+  assert.equal(result.direction, 'credit');
+  assert.equal(result.amountPaise, 50000);
+  assert.equal(result.counterparty, 'friend@okaxis');
+  assert.equal(result.reference, '600000000031');
+});
+
+test('SBI debit with no currency sign ("debited by 20.0") is understood', () => {
+  const result = parsePaymentNotification({
+    title: 'AD-SBIUPI-S',
+    text: 'Dear UPI user A/C X5555 debited by 20.0 on date 28Oct26 trf to TEST SHOP Refno 600000000032. If not u? call 1800000000. -SBI',
+  });
+  assert.equal(result.direction, 'debit');
+  assert.equal(result.amountPaise, 2000);
+  assert.equal(result.bankName, 'State Bank of India');
+  assert.equal(result.accountLast4, '5555');
+  assert.equal(result.counterparty, 'TEST SHOP');
+  assert.equal(result.reference, '600000000032');
+});
+
+test('SBI credit "credited by Rs.500 ... transfer from NAME" is understood', () => {
+  const result = parsePaymentNotification({
+    title: 'AD-SBIINB-S',
+    text: 'Dear SBI User, your A/c X5555-credited by Rs.500 on 28Oct26 transfer from TEST PERSON Ref No 600000000033 -SBI',
+  });
+  assert.equal(result.direction, 'credit');
+  assert.equal(result.amountPaise, 50000);
+  assert.equal(result.counterparty, 'TEST PERSON');
+  assert.equal(result.reference, '600000000033');
+});
+
 test('category suggestions: keywords, income, unknown', () => {
   assert.equal(suggestCategoryName('INDIAN OIL PETROL PUMP', 'debit'), 'Petrol & Transport');
   assert.equal(suggestCategoryName('dmart.store@ybl', 'debit'), 'Groceries');

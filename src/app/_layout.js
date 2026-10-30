@@ -29,6 +29,7 @@ export default function RootLayout() {
             <Stack.Screen name="review-payments" options={{ title: 'Review Payments' }} />
             <Stack.Screen name="auto-detect" options={{ title: 'Auto-Detect Settings' }} />
             <Stack.Screen name="accounts" options={{ title: 'Bank Accounts' }} />
+            <Stack.Screen name="loans" options={{ title: 'Loans' }} />
           </Stack>
         </SQLiteProvider>
       </Suspense>

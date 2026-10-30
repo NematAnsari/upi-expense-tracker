@@ -9,6 +9,7 @@ import { addDetectedAsTransaction, listPendingDetected } from '../../db/detected
 import { getLastPaymentMethod } from '../../db/suggestions';
 import { getTemplate, listTemplates, markTemplateUsed } from '../../db/templates';
 import { createTransaction } from '../../db/transactions';
+import { isValidLoanType, LOAN_TYPES } from '../../domain/loans';
 import { applyTemplate, createEmptyTransactionForm } from '../../domain/transactionForm';
 import { paiseToInputString } from '../../utils/money';
 import { showMessage } from '../../ui/notify';
@@ -17,8 +18,8 @@ export default function NewTransactionScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   // templateId: opened from a Quick add template ("/transaction/new?templateId=3").
-  // detectedId: opened with "Edit" from Review Payments.
-  const { templateId, detectedId } = useLocalSearchParams();
+  // detectedId: opened with "Edit" from Review Payments (loanType: what was chosen on the card).
+  const { templateId, detectedId, loanType } = useLocalSearchParams();
   const [state, setState] = useState({ data: null, error: null });
   const [attempt, setAttempt] = useState(0);
 
@@ -44,6 +45,7 @@ export default function NewTransactionScreen() {
         ...initialValues,
         amountText: paiseToInputString(detected.amountPaise),
         direction: detected.direction,
+        loanType: isValidLoanType(loanType || null, detected.direction) ? loanType || null : null,
         accountId: detected.accountId,
         categoryId: detected.suggestedCategoryId,
         occurredAt: detected.postedAt,
@@ -59,8 +61,12 @@ export default function NewTransactionScreen() {
       initialValues = applyTemplate(initialValues, template);
       await markTemplateUsed(db, template.id);
     }
+    // Opened from the Loans screen: start with that loan type (and its Paid/Received side).
+    if (loanType && LOAN_TYPES[loanType]) {
+      initialValues = { ...initialValues, loanType, direction: LOAN_TYPES[loanType].direction };
+    }
     return { categories, templates, accounts, initialValues };
-  }, [db, templateId, detectedId]);
+  }, [db, templateId, detectedId, loanType]);
 
   useEffect(() => {
     let active = true;

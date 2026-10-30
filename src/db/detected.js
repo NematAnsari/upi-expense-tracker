@@ -305,11 +305,15 @@ export async function getDetected(db, id) {
   return db.getFirstAsync(`${SELECT_DETECTED} WHERE d.id = ?`, [id]);
 }
 
-/** The transaction a detected payment becomes if you tap Add without changes. */
-export function detectedToTransaction(detected, categoryId) {
+/**
+ * The transaction a detected payment becomes when you tap Add. loanType is
+ * set when you marked it as money lent, borrowed or paid back.
+ */
+export function detectedToTransaction(detected, categoryId, loanType = null) {
   return {
     amountPaise: detected.amountPaise,
     direction: detected.direction,
+    loanType,
     accountId: detected.accountId,
     purpose: null,
     categoryId,

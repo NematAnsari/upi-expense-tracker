@@ -16,15 +16,17 @@ import java.util.UUID
 object CapturedNotificationStore {
   private const val PREFS_NAME = "upi_notification_listener"
   private const val KEY_ITEMS = "captured"
+  private const val KEY_SEEN = "seen_fingerprints"
   private const val MAX_ITEMS = 500
+  private const val MAX_SEEN = 1000
 
   private val lock = Any()
 
   private fun prefs(context: Context) =
     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-  private fun readItems(context: Context): JSONArray {
-    val raw = prefs(context).getString(KEY_ITEMS, null) ?: return JSONArray()
+  private fun readArray(context: Context, key: String): JSONArray {
+    val raw = prefs(context).getString(key, null) ?: return JSONArray()
     return try {
       JSONArray(raw)
     } catch (error: Exception) {
@@ -32,16 +34,30 @@ object CapturedNotificationStore {
     }
   }
 
-  private fun writeItems(context: Context, items: JSONArray) {
-    prefs(context).edit().putString(KEY_ITEMS, items.toString()).apply()
+  private fun writeArray(context: Context, key: String, array: JSONArray) {
+    prefs(context).edit().putString(key, array.toString()).apply()
+  }
+
+  /** Keeps only the last `max` entries so storage cannot grow without limit. */
+  private fun keepNewest(array: JSONArray, max: Int): JSONArray {
+    val trimmed = JSONArray()
+    val start = maxOf(0, array.length() - max)
+    for (index in start until array.length()) {
+      trimmed.put(array.get(index))
+    }
+    return trimmed
   }
 
   /**
-   * Adds an item unless the same notification with the same text is already queued.
+   * Adds a message unless it was seen before. A conversation notification (for
+   * example Google Messages) keeps showing older messages, so "seen" is
+   * remembered even after the app has picked an item up from the queue.
+   * `fingerprint` identifies one message (see PaymentNotificationListenerService).
    * Returns true if something new was stored.
    */
   fun add(
     context: Context,
+    fingerprint: String,
     packageName: String,
     notificationKey: String,
     title: String,
@@ -49,38 +65,35 @@ object CapturedNotificationStore {
     postedAt: Long
   ): Boolean {
     synchronized(lock) {
-      val items = readItems(context)
-      for (index in 0 until items.length()) {
-        val existing = items.getJSONObject(index)
-        if (existing.optString("notificationKey") == notificationKey && existing.optString("text") == text) {
+      val seen = readArray(context, KEY_SEEN)
+      for (index in 0 until seen.length()) {
+        if (seen.optString(index) == fingerprint) {
           return false
         }
       }
 
-      val item = JSONObject()
-        .put("id", UUID.randomUUID().toString())
-        .put("packageName", packageName)
-        .put("notificationKey", notificationKey)
-        .put("title", title)
-        .put("text", text)
-        .put("postedAt", postedAt)
-        .put("capturedAt", System.currentTimeMillis())
-      items.put(item)
+      val items = readArray(context, KEY_ITEMS)
+      items.put(
+        JSONObject()
+          .put("id", UUID.randomUUID().toString())
+          .put("packageName", packageName)
+          .put("notificationKey", notificationKey)
+          .put("title", title)
+          .put("text", text)
+          .put("postedAt", postedAt)
+          .put("capturedAt", System.currentTimeMillis())
+      )
+      seen.put(fingerprint)
 
-      // Keep only the newest items so storage cannot grow without limit.
-      val trimmed = JSONArray()
-      val start = maxOf(0, items.length() - MAX_ITEMS)
-      for (index in start until items.length()) {
-        trimmed.put(items.get(index))
-      }
-      writeItems(context, trimmed)
+      writeArray(context, KEY_ITEMS, keepNewest(items, MAX_ITEMS))
+      writeArray(context, KEY_SEEN, keepNewest(seen, MAX_SEEN))
       return true
     }
   }
 
   fun getAll(context: Context): List<Map<String, Any>> {
     synchronized(lock) {
-      val items = readItems(context)
+      val items = readArray(context, KEY_ITEMS)
       return (0 until items.length()).map { index ->
         val item = items.getJSONObject(index)
         mapOf(
@@ -99,7 +112,7 @@ object CapturedNotificationStore {
   fun remove(context: Context, ids: List<String>) {
     synchronized(lock) {
       val idSet = ids.toSet()
-      val items = readItems(context)
+      val items = readArray(context, KEY_ITEMS)
       val kept = JSONArray()
       for (index in 0 until items.length()) {
         val item = items.getJSONObject(index)
@@ -107,13 +120,13 @@ object CapturedNotificationStore {
           kept.put(item)
         }
       }
-      writeItems(context, kept)
+      writeArray(context, KEY_ITEMS, kept)
     }
   }
 
   fun clear(context: Context) {
     synchronized(lock) {
-      writeItems(context, JSONArray())
+      writeArray(context, KEY_ITEMS, JSONArray())
     }
   }
 }

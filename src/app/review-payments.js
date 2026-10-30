@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
 import { Alert, Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
+import { Button } from '../components/Button';
 import { DetectedPaymentCard } from '../components/DetectedPaymentCard';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { UndoBar } from '../components/UndoBar';
@@ -21,6 +22,8 @@ import {
 } from '../db/detected';
 import { useFocusQuery } from '../hooks/useFocusQuery';
 import { syncDetectedPayments } from '../services/detection';
+import { loanLabel } from '../domain/loans';
+import { categoryIdForSave } from '../domain/transactionForm';
 import { formatDayLabel } from '../utils/dates';
 import { formatINR } from '../utils/money';
 
@@ -43,8 +46,9 @@ export default function ReviewPaymentsScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  // Categories you picked on a card before tapping Add (item id -> category id).
+  // Choices made on a card before tapping Add (item id -> category id / loan type).
   const [categoryChoices, setCategoryChoices] = useState({});
+  const [loanChoices, setLoanChoices] = useState({});
   const [undoAction, setUndoAction] = useState(null);
   const hideUndo = useCallback(() => setUndoAction(null), []);
 
@@ -89,12 +93,28 @@ export default function ReviewPaymentsScreen() {
     }
   }
 
+  /** The transaction an item becomes with the choices made on its card. */
+  function transactionFor(item) {
+    const loanType = loanChoices[item.id] ?? null;
+    const categoryId = categoryIdForSave(
+      { loanType, categoryId: categoryChoices[item.id] ?? item.suggestedCategoryId },
+      data.categories,
+    );
+    return detectedToTransaction(item, categoryId, loanType);
+  }
+
+  /** Ready for one-tap Add: not a possible duplicate, has a category, and a loan has a name. */
+  function isReady(item) {
+    const values = transactionFor(item);
+    return !item.possibleDuplicate && values.categoryId != null && (!values.loanType || Boolean(item.counterparty));
+  }
+
   function handleAdd(item) {
-    const categoryId = categoryChoices[item.id] ?? item.suggestedCategoryId;
-    const kind = item.direction === 'credit' ? 'Income' : 'Expense';
+    const values = transactionFor(item);
+    const kind = values.loanType ? loanLabel(values.loanType) : item.direction === 'credit' ? 'Income' : 'Expense';
     const save = () =>
       runWithUndo(
-        () => addDetectedAsTransaction(db, item.id, detectedToTransaction(item, categoryId)),
+        () => addDetectedAsTransaction(db, item.id, values),
         () => undoAddDetected(db, item.id),
         `${kind} added: ${formatINR(item.amountPaise)}`,
       );
@@ -121,7 +141,51 @@ export default function ReviewPaymentsScreen() {
     );
   }
 
-  const handleEdit = (item) => router.push({ pathname: '/transaction/new', params: { detectedId: item.id } });
+  const handleEdit = (item) =>
+    router.push({
+      pathname: '/transaction/new',
+      params: { detectedId: item.id, loanType: loanChoices[item.id] ?? '' },
+    });
+
+  /** Adds every ready item with the choices shown on its card. */
+  function handleAddAll(items) {
+    const ready = items.filter(isReady);
+    if (ready.length === 0) {
+      return;
+    }
+    const skipped = items.length - ready.length;
+    Alert.alert(
+      `Add ${ready.length} ${ready.length === 1 ? 'payment' : 'payments'}?`,
+      `They are saved with the categories shown on each card.${
+        skipped > 0
+          ? ` ${skipped} ${skipped === 1 ? 'payment needs' : 'payments need'} a check first (possible duplicate or missing name).`
+          : ''
+      }`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Add all',
+          onPress: () => {
+            const added = [];
+            runWithUndo(
+              async () => {
+                for (const item of ready) {
+                  await addDetectedAsTransaction(db, item.id, transactionFor(item));
+                  added.push(item.id);
+                }
+              },
+              async () => {
+                for (const id of added) {
+                  await undoAddDetected(db, id);
+                }
+              },
+              `Added ${ready.length} ${ready.length === 1 ? 'payment' : 'payments'}`,
+            );
+          },
+        },
+      ],
+    );
+  }
 
   if (error) {
     return <ErrorState onRetry={reload} />;
@@ -131,6 +195,7 @@ export default function ReviewPaymentsScreen() {
   }
 
   const duplicateCount = data.items.filter((item) => item.possibleDuplicate).length;
+  const addableCount = data.items.filter(isReady).length;
 
   return (
     <View style={styles.screen}>
@@ -141,16 +206,26 @@ export default function ReviewPaymentsScreen() {
         stickySectionHeadersEnabled={false}
         ListHeaderComponent={
           data.items.length > 0 ? (
-            <View style={styles.header}>
-              <Text style={styles.summary}>
-                {data.items.length} to review
-                {duplicateCount > 0
-                  ? ` · ${duplicateCount} possible ${duplicateCount === 1 ? 'duplicate' : 'duplicates'}`
-                  : ''}
-              </Text>
-              <Pressable accessibilityRole="button" onPress={() => router.push('/accounts')} hitSlop={8}>
-                <Text style={styles.link}>Bank accounts</Text>
-              </Pressable>
+            <View style={styles.headerBlock}>
+              <View style={styles.header}>
+                <Text style={styles.summary}>
+                  {data.items.length} to review
+                  {duplicateCount > 0
+                    ? ` · ${duplicateCount} possible ${duplicateCount === 1 ? 'duplicate' : 'duplicates'}`
+                    : ''}
+                </Text>
+                <Pressable accessibilityRole="button" onPress={() => router.push('/accounts')} hitSlop={8}>
+                  <Text style={styles.link}>Bank accounts</Text>
+                </Pressable>
+              </View>
+              {addableCount > 1 ? (
+                <Button
+                  label={`Add all ${addableCount}`}
+                  variant="secondary"
+                  onPress={() => handleAddAll(data.items)}
+                  disabled={busy}
+                />
+              ) : null}
             </View>
           ) : null
         }
@@ -161,6 +236,8 @@ export default function ReviewPaymentsScreen() {
             categories={data.categories}
             categoryId={categoryChoices[item.id] ?? item.suggestedCategoryId}
             onChangeCategory={(id) => setCategoryChoices((current) => ({ ...current, [item.id]: id }))}
+            loanType={loanChoices[item.id] ?? null}
+            onChangeLoanType={(value) => setLoanChoices((current) => ({ ...current, [item.id]: value }))}
             busy={busy}
             onAdd={() => handleAdd(item)}
             onEdit={() => handleEdit(item)}
@@ -181,6 +258,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   // Extra space at the bottom so the Undo bar never covers the last card.
   content: { padding: spacing.lg, paddingBottom: 120 },
+  headerBlock: { gap: spacing.md },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   summary: { fontSize: fontSize.sm, color: colors.textMuted },
   link: { fontSize: fontSize.md, color: colors.primary, fontWeight: '600' },

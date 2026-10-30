@@ -91,6 +91,8 @@ tests/            Node tests for money, dates, parsing and all database logic.
   (or `amountColor()` from the theme) for every amount shown on screen.
 - **Direction**: `'debit'` = money paid (an expense), `'credit'` = money received (income).
   Income is never counted as spending.
+- **Loans** (`loan_type`: lent, borrowed, lent_repaid, borrowed_repaid) are not spending or income. They are left
+  out of those totals and summed per person on the Loans screen (matched by name, ignoring case).
 - **Dates** are stored as UTC milliseconds and shown in the phone's local time.
 - **SQL** always uses `?` placeholders, never string concatenation.
 - **Database changes** go in a new migration at the end of `src/db/migrations.js`. Never edit a shipped one.

@@ -27,9 +27,10 @@ const TYPE_FILTERS = [
   { value: 'credit', label: 'Received' },
 ];
 
-function sumPaise(transactions, direction) {
+/** Total of one direction. Loans are left out unless includeLoans is true. */
+function sumPaise(transactions, direction, includeLoans = false) {
   return transactions
-    .filter((transaction) => transaction.direction === direction)
+    .filter((transaction) => transaction.direction === direction && (includeLoans || !transaction.loanType))
     .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
 }
 
@@ -42,23 +43,29 @@ export default function HistoryScreen() {
   const [allMonths, setAllMonths] = useState(false);
   const [direction, setDirection] = useState(null);
   const [missingPurpose, setMissingPurpose] = useState(false);
+  const [loansOnly, setLoansOnly] = useState(false);
   const [categoryId, setCategoryId] = useState(null);
   const [accountId, setAccountId] = useState(null);
   const [sort, setSort] = useState('desc');
   const [showMoreFilters, setShowMoreFilters] = useState(false);
 
-  // The Dashboard's "Fill in" link opens this tab with filter params.
+  // Links from other screens open this tab with filter params: the Dashboard's
+  // "Fill in" (missing-purpose) and a person on the Loans screen (loans).
   // Adjusting state while rendering (instead of in an effect) is React's
   // recommended way to react to changed inputs, and avoids a flash of the old list.
   const [appliedLinkAt, setAppliedLinkAt] = useState(null);
-  if (params.filter === 'missing-purpose' && params.at !== appliedLinkAt) {
+  if (params.filter && params.at !== appliedLinkAt) {
     setAppliedLinkAt(params.at);
-    setMissingPurpose(true);
     setDirection(null);
-    setSearch('');
     setCategoryId(null);
     setAccountId(null);
-    if (params.month) {
+    setMissingPurpose(params.filter === 'missing-purpose');
+    setLoansOnly(params.filter === 'loans');
+    setSearch(params.search ?? '');
+    if (params.filter === 'loans') {
+      // A loan can be paid back months later, so show every month.
+      setAllMonths(true);
+    } else if (params.month) {
       setMonthKey(params.month);
       setAllMonths(false);
     }
@@ -67,19 +74,20 @@ export default function HistoryScreen() {
   const loader = useCallback(async () => {
     const range = allMonths ? {} : getMonthRange(monthKey);
     const [transactions, categories, accounts] = await Promise.all([
-      listTransactions(db, { ...range, direction, categoryId, search, missingPurpose, accountId, sort }),
+      listTransactions(db, { ...range, direction, categoryId, search, missingPurpose, loansOnly, accountId, sort }),
       listCategories(db),
       listAccounts(db),
     ]);
     return { transactions, categories, accounts };
-  }, [db, monthKey, allMonths, direction, categoryId, search, missingPurpose, accountId, sort]);
+  }, [db, monthKey, allMonths, direction, categoryId, search, missingPurpose, loansOnly, accountId, sort]);
   const { data, error, reload } = useFocusQuery(loader);
 
   const transactions = data?.transactions ?? [];
-  const spentPaise = sumPaise(transactions, 'debit');
-  const receivedPaise = sumPaise(transactions, 'credit');
+  // In the Loans view the totals are money out and in; elsewhere loans are left out.
+  const spentPaise = sumPaise(transactions, 'debit', loansOnly);
+  const receivedPaise = sumPaise(transactions, 'credit', loansOnly);
   const moreFilterCount = (categoryId != null ? 1 : 0) + (accountId != null ? 1 : 0);
-  const hasFilters = Boolean(search.trim()) || direction != null || missingPurpose || moreFilterCount > 0;
+  const hasFilters = Boolean(search.trim()) || direction != null || missingPurpose || loansOnly || moreFilterCount > 0;
 
   async function handleDelete(transaction) {
     if (!(await confirmDeleteTransaction(transaction))) {
@@ -99,6 +107,7 @@ export default function HistoryScreen() {
     setSearch('');
     setDirection(null);
     setMissingPurpose(false);
+    setLoansOnly(false);
     setCategoryId(null);
     setAccountId(null);
   }
@@ -158,6 +167,7 @@ export default function HistoryScreen() {
             />
           ))}
           <Chip label="Missing purpose" selected={missingPurpose} onPress={() => setMissingPurpose(!missingPurpose)} />
+          <Chip label="Loans" selected={loansOnly} onPress={() => setLoansOnly(!loansOnly)} />
           <Chip label="All months" selected={allMonths} onPress={() => setAllMonths(!allMonths)} />
           <Chip
             label={sort === 'desc' ? 'Newest first ↓' : 'Oldest first ↑'}
@@ -213,7 +223,7 @@ export default function HistoryScreen() {
           ListHeaderComponent={
             transactions.length > 0 ? (
               <Text style={styles.summary}>
-                {`${transactions.length} ${transactions.length === 1 ? 'transaction' : 'transactions'} · Spent `}
+                {`${transactions.length} ${transactions.length === 1 ? 'transaction' : 'transactions'} · ${loansOnly ? 'Paid out' : 'Spent'} `}
                 <Amount paise={spentPaise} direction="debit" size="sm" />
                 {' · Received '}
                 <Amount paise={receivedPaise} direction="credit" size="sm" />

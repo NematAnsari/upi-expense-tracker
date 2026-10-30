@@ -35,15 +35,16 @@ const oct = (day, hour = 12, minute = 0) => new Date(2026, 9, day, hour, minute)
 test('migration creates schema, seeds categories, and is safe to rerun', async () => {
   const { db, raw } = await setup();
   const categories = await listCategories(db);
-  // Version 3 adds Income and Uncategorized after the defaults.
+  // Version 3 adds Income and Uncategorized after the defaults; version 4 adds Loans.
+  const added = ['Income', 'Uncategorized', 'Loans'];
   assert.deepEqual(
     categories.map((c) => c.name),
-    [...DEFAULT_CATEGORIES, 'Income', 'Uncategorized'],
+    [...DEFAULT_CATEGORIES, ...added],
   );
   assert.equal(raw.prepare('PRAGMA user_version').get().user_version, LATEST_VERSION);
 
   await migrateDbIfNeeded(db);
-  assert.equal((await listCategories(db)).length, DEFAULT_CATEGORIES.length + 2);
+  assert.equal((await listCategories(db)).length, DEFAULT_CATEGORIES.length + added.length);
 });
 
 test('database rejects bad data even if validation is bypassed', async () => {

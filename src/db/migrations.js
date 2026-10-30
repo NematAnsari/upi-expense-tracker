@@ -121,6 +121,21 @@ export const MIGRATIONS = [
       );
     }
   },
+
+  // Version 4: money lent and borrowed. A loan is not spending or income, so
+  // loan rows are left out of those totals and tracked per person instead.
+  async (db) => {
+    await db.execAsync(`
+      ALTER TABLE transactions ADD COLUMN loan_type TEXT
+        CHECK (loan_type IS NULL OR loan_type IN ('lent', 'borrowed', 'lent_repaid', 'borrowed_repaid'));
+      CREATE INDEX idx_transactions_loan_type ON transactions (loan_type);
+    `);
+    await db.runAsync(
+      `INSERT OR IGNORE INTO categories (name, is_default, sort_order, created_at)
+       VALUES ('Loans', 1, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM categories), ?)`,
+      [Date.now()],
+    );
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length;

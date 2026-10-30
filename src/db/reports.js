@@ -1,11 +1,14 @@
 // Spending calculations shared by the Dashboard and Reports screens.
 // Only 'debit' rows are expenses. Incoming payments ('credit') are never counted.
+// Loans (money lent, borrowed or paid back) are neither spending nor income,
+// so they are left out of both; see getLoanBalances for them.
 
+import { describeBalance } from '../domain/loans.js';
 import { getDayRange, getMonthRange, getWeekBuckets, shiftMonth } from '../utils/dates.js';
 import { averagePaise, percentOf } from '../utils/money.js';
 import { SELECT_TRANSACTION, listTransactions } from './transactions.js';
 
-const IN_RANGE = "t.direction = 'debit' AND t.occurred_at >= ? AND t.occurred_at < ?";
+const IN_RANGE = "t.direction = 'debit' AND t.loan_type IS NULL AND t.occurred_at >= ? AND t.occurred_at < ?";
 
 export async function getSpendingTotals(db, startMs, endMs) {
   const row = await db.getFirstAsync(
@@ -70,10 +73,46 @@ export async function getReceivedTotals(db, startMs, endMs) {
   const row = await db.getFirstAsync(
     `SELECT COALESCE(SUM(t.amount_paise), 0) AS totalPaise, COUNT(*) AS count
      FROM transactions t
-     WHERE t.direction = 'credit' AND t.occurred_at >= ? AND t.occurred_at < ?`,
+     WHERE t.direction = 'credit' AND t.loan_type IS NULL AND t.occurred_at >= ? AND t.occurred_at < ?`,
     [startMs, endMs],
   );
   return { totalPaise: row?.totalPaise ?? 0, count: row?.count ?? 0 };
+}
+
+/**
+ * Loan balance per person, from all time (loans do not belong to one month).
+ * People are matched by name, ignoring case and spaces at the ends.
+ * Returns { people: [{ person, netPaise, status, amountPaise, lastAt, count }],
+ *           owedToYouPaise, youOwePaise }.
+ * Settled people (net 0) are listed last.
+ */
+export async function getLoanBalances(db) {
+  // With MAX(occurred_at), SQLite takes `merchant` (the spelling) from the latest entry.
+  const rows = await db.getAllAsync(
+    `SELECT
+       merchant AS person,
+       SUM(CASE loan_type
+             WHEN 'lent' THEN amount_paise
+             WHEN 'lent_repaid' THEN -amount_paise
+             WHEN 'borrowed' THEN -amount_paise
+             WHEN 'borrowed_repaid' THEN amount_paise
+           END) AS netPaise,
+       MAX(occurred_at) AS lastAt,
+       COUNT(*) AS count
+     FROM transactions
+     WHERE loan_type IS NOT NULL AND merchant IS NOT NULL AND trim(merchant) <> ''
+     GROUP BY lower(trim(merchant))`,
+  );
+
+  const people = rows
+    .map((row) => ({ ...row, person: row.person.trim(), ...describeBalance(row.netPaise) }))
+    .sort((a, b) => (a.status === 'settled') - (b.status === 'settled') || b.lastAt - a.lastAt);
+
+  return {
+    people,
+    owedToYouPaise: people.filter((p) => p.status === 'owesYou').reduce((sum, p) => sum + p.amountPaise, 0),
+    youOwePaise: people.filter((p) => p.status === 'youOwe').reduce((sum, p) => sum + p.amountPaise, 0),
+  };
 }
 
 export async function getDashboardData(db, monthKey, now = new Date()) {

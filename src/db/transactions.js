@@ -15,7 +15,8 @@ export const SELECT_TRANSACTION = `
     t.reference,
     t.notes,
     t.account_id AS accountId,
-    a.nickname AS accountName
+    a.nickname AS accountName,
+    t.loan_type AS loanType
   FROM transactions t
   JOIN categories c ON c.id = t.category_id
   LEFT JOIN accounts a ON a.id = t.account_id
@@ -27,9 +28,21 @@ export const SELECT_TRANSACTION = `
  * search: matches purpose or merchant, case-insensitive. sort: 'desc' | 'asc'.
  * missingPurpose: only expenses with no purpose yet, so they can be filled in.
  * accountId: one bank account. direction: 'debit' (paid) or 'credit' (received).
+ * loansOnly: only money lent, borrowed or paid back.
  */
 export async function listTransactions(db, filters = {}) {
-  const { startMs, endMs, categoryId, search, missingPurpose, accountId, direction, sort = 'desc', limit } = filters;
+  const {
+    startMs,
+    endMs,
+    categoryId,
+    search,
+    missingPurpose,
+    accountId,
+    direction,
+    loansOnly,
+    sort = 'desc',
+    limit,
+  } = filters;
   const where = [];
   const params = [];
 
@@ -48,8 +61,8 @@ export async function listTransactions(db, filters = {}) {
     params.push(term, term);
   }
   if (missingPurpose) {
-    // Incoming money does not need a purpose to be complete.
-    where.push("t.purpose IS NULL AND t.direction = 'debit'");
+    // Incoming money and loans do not need a purpose to be complete.
+    where.push("t.purpose IS NULL AND t.direction = 'debit' AND t.loan_type IS NULL");
   }
   if (accountId != null) {
     where.push('t.account_id = ?');
@@ -58,6 +71,9 @@ export async function listTransactions(db, filters = {}) {
   if (direction != null) {
     where.push('t.direction = ?');
     params.push(direction);
+  }
+  if (loansOnly) {
+    where.push('t.loan_type IS NOT NULL');
   }
 
   const order = sort === 'asc' ? 'ASC' : 'DESC';
@@ -85,8 +101,8 @@ export async function createTransaction(db, values) {
   const result = await db.runAsync(
     `INSERT INTO transactions
       (amount_paise, direction, purpose, category_id, occurred_at, payment_method, merchant, reference, notes,
-       account_id, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       account_id, loan_type, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       values.amountPaise,
       values.direction ?? 'debit',
@@ -98,6 +114,7 @@ export async function createTransaction(db, values) {
       values.reference,
       values.notes,
       values.accountId ?? null,
+      values.loanType ?? null,
       values.source ?? 'manual',
       now,
       now,
@@ -110,7 +127,7 @@ export async function updateTransaction(db, id, values) {
   const result = await db.runAsync(
     `UPDATE transactions SET
       amount_paise = ?, direction = ?, purpose = ?, category_id = ?, occurred_at = ?, payment_method = ?,
-      merchant = ?, reference = ?, notes = ?, account_id = ?, updated_at = ?
+      merchant = ?, reference = ?, notes = ?, account_id = ?, loan_type = ?, updated_at = ?
      WHERE id = ?`,
     [
       values.amountPaise,
@@ -123,6 +140,7 @@ export async function updateTransaction(db, id, values) {
       values.reference,
       values.notes,
       values.accountId ?? null,
+      values.loanType ?? null,
       Date.now(),
       id,
     ],

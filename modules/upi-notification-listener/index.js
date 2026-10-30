@@ -13,6 +13,20 @@ export function isPermissionGranted() {
   return isAvailable ? NativeModule.isPermissionGranted() : false;
 }
 
+/**
+ * Asks Android to reconnect the notification reader. Called whenever the app
+ * opens, because Android can disconnect it after an update or to save battery.
+ */
+export function reconnectListener() {
+  if (isAvailable && NativeModule.reconnectListener && isPermissionGranted()) {
+    try {
+      NativeModule.reconnectListener();
+    } catch (error) {
+      console.warn('Could not reconnect the notification listener', error);
+    }
+  }
+}
+
 /** True when battery saving will not stop detection in the background. */
 export function isBatteryUnrestricted() {
   // Older builds of the app do not have this check yet; assume it is fine.

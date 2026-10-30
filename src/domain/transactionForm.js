@@ -1,8 +1,9 @@
-// Pure helpers for the expense form. No React or database code here, so they
-// can be tested on their own.
+// Pure helpers for the transaction form. No React or database code here, so
+// they can be tested on their own.
 
 import { DEFAULT_PAYMENT_METHOD, PAYMENT_METHODS } from '../constants/categories.js';
 import { paiseToInputString } from '../utils/money.js';
+import { LOANS_CATEGORY } from './loans.js';
 
 export const QUICK_CATEGORY_COUNT = 6;
 
@@ -39,6 +40,7 @@ export function createEmptyTransactionForm(lastPaymentMethod) {
   return {
     amountText: '',
     direction: 'debit',
+    loanType: null,
     accountId: null,
     purpose: '',
     categoryId: null,
@@ -48,6 +50,20 @@ export function createEmptyTransactionForm(lastPaymentMethod) {
     reference: '',
     notes: '',
   };
+}
+
+/** Categories you can pick by hand. "Loans" is set automatically for loans, so it is not offered. */
+export function pickableCategories(categories) {
+  return categories.filter((category) => category.name.toLowerCase() !== LOANS_CATEGORY.toLowerCase());
+}
+
+/** For a loan the category is always "Loans"; otherwise the chosen one is kept. */
+export function categoryIdForSave(form, categories) {
+  if (!form.loanType) {
+    return form.categoryId;
+  }
+  const loans = categories.find((category) => category.name.toLowerCase() === LOANS_CATEGORY.toLowerCase());
+  return loans?.id ?? form.categoryId;
 }
 
 /** Fills the form from a template. Keeps a typed amount if the template has none. */

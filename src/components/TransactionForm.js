@@ -2,11 +2,12 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { PAYMENT_METHODS } from '../constants/categories';
-import { amountColor, colors, fontSize, spacing } from '../constants/theme';
+import { amountColor, colors, fontSize, radius, spacing } from '../constants/theme';
 import { createCategory } from '../db/categories';
 import { suggestMerchants, suggestPurposes } from '../db/suggestions';
 import { deleteTemplate, markTemplateUsed, saveTemplate } from '../db/templates';
-import { applyTemplate, buildTemplateName } from '../domain/transactionForm';
+import { isValidLoanType, LOAN_TYPES } from '../domain/loans';
+import { applyTemplate, buildTemplateName, categoryIdForSave, pickableCategories } from '../domain/transactionForm';
 import { validateTemplateForm, validateTransactionForm } from '../domain/validation';
 import { useAsyncValue } from '../hooks/useAsyncValue';
 import { showMessage } from '../ui/notify';
@@ -15,6 +16,7 @@ import { CategoryPicker } from './CategoryPicker';
 import { Chip } from './Chip';
 import { DateTimeField } from './DateTimeField';
 import { DirectionToggle } from './DirectionToggle';
+import { LoanTypePicker } from './LoanTypePicker';
 import { SuggestionChips } from './SuggestionChips';
 import { TemplateBar, templateLabel } from './TemplateBar';
 import { FormField, TextField } from './TextField';
@@ -50,6 +52,8 @@ export function TransactionForm({
   const savingRef = useRef(false);
   const templatesEnabled = templates != null;
   const received = form.direction === 'credit';
+  const loan = form.loanType ? LOAN_TYPES[form.loanType] : null;
+  const personLabel = loan?.personLabel ?? (received ? 'Received from' : 'Paid to');
 
   const loadMerchantSuggestions = useCallback(() => suggestMerchants(db, form.merchant), [db, form.merchant]);
   const loadPurposeSuggestions = useCallback(
@@ -71,6 +75,15 @@ export function TransactionForm({
   }
 
   const update = (field, value) => updateFields({ [field]: value });
+
+  // Switching Paid/Received clears a loan choice that belongs to the other side.
+  function changeDirection(direction) {
+    const changes = { direction };
+    if (!isValidLoanType(form.loanType, direction)) {
+      changes.loanType = null;
+    }
+    updateFields(changes);
+  }
 
   // Picking a remembered merchant or purpose also fills an empty category.
   function pickSuggestion(field, suggestion) {
@@ -139,7 +152,8 @@ export function TransactionForm({
     if (savingRef.current) {
       return;
     }
-    const result = validateTransactionForm(form);
+    // Loans are always saved under the "Loans" category.
+    const result = validateTransactionForm({ ...form, categoryId: categoryIdForSave(form, categoryList) });
     setErrors(result.errors);
     if (!result.values) {
       return;
@@ -168,7 +182,15 @@ export function TransactionForm({
       ) : null}
 
       <FormField label="Type" error={errors.direction}>
-        <DirectionToggle value={form.direction} onChange={(value) => update('direction', value)} />
+        <DirectionToggle value={form.direction} onChange={changeDirection} />
+      </FormField>
+
+      <FormField label="What is this?" error={errors.loanType}>
+        <LoanTypePicker
+          direction={form.direction ?? 'debit'}
+          value={form.loanType}
+          onChange={(value) => update('loanType', value)}
+        />
       </FormField>
 
       <FormField label="Amount (₹)" required error={errors.amount}>
@@ -184,40 +206,47 @@ export function TransactionForm({
         />
       </FormField>
 
-      <FormField label="Category" required error={errors.category}>
-        <CategoryPicker
-          categories={categoryList}
-          selectedId={form.categoryId}
-          onSelect={(id) => update('categoryId', id)}
-          onCreate={handleCreateCategory}
-        />
-      </FormField>
-
-      <FormField label="Purpose">
-        <TextField
-          value={form.purpose}
-          onChangeText={(text) => update('purpose', text)}
-          placeholder={received ? 'What was this money for?' : 'What did you pay for?'}
-          maxLength={120}
-        />
-        <SuggestionChips
-          label="Use purpose"
-          suggestions={purposeSuggestions}
-          onPick={(suggestion) => pickSuggestion('purpose', suggestion)}
-        />
-      </FormField>
-
-      <FormField label={received ? 'Received from' : 'Paid to'}>
+      <FormField label={personLabel} required={Boolean(loan)} error={errors.merchant}>
         <TextField
           value={form.merchant}
           onChangeText={(text) => update('merchant', text)}
-          placeholder="Shop or person's name"
+          placeholder={loan ? "Person's name" : "Shop or person's name"}
+          error={errors.merchant}
           maxLength={80}
         />
         <SuggestionChips
           label="Use name"
           suggestions={merchantSuggestions}
           onPick={(suggestion) => pickSuggestion('merchant', suggestion)}
+        />
+      </FormField>
+
+      {loan ? (
+        <Text style={styles.loanNote}>{loan.note}</Text>
+      ) : (
+        <FormField label="Category" required error={errors.category}>
+          <CategoryPicker
+            categories={pickableCategories(categoryList)}
+            selectedId={form.categoryId}
+            onSelect={(id) => update('categoryId', id)}
+            onCreate={handleCreateCategory}
+          />
+        </FormField>
+      )}
+
+      <FormField label="Purpose">
+        <TextField
+          value={form.purpose}
+          onChangeText={(text) => update('purpose', text)}
+          placeholder={
+            loan ? 'What was it for? (optional)' : received ? 'What was this money for?' : 'What did you pay for?'
+          }
+          maxLength={120}
+        />
+        <SuggestionChips
+          label="Use purpose"
+          suggestions={purposeSuggestions}
+          onPick={(suggestion) => pickSuggestion('purpose', suggestion)}
         />
       </FormField>
 
@@ -301,6 +330,13 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.lg, paddingBottom: 160 },
   amountInput: { fontSize: fontSize.xl, fontWeight: '700' },
+  loanNote: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    backgroundColor: colors.primarySoft,
+    padding: spacing.md,
+    borderRadius: radius.sm,
+  },
   notes: { minHeight: 88, paddingTop: spacing.md, textAlignVertical: 'top' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   moreDetails: { minHeight: 44, justifyContent: 'center' },

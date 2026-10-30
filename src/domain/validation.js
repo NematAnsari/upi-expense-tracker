@@ -1,5 +1,6 @@
 import { PAYMENT_METHODS } from '../constants/categories.js';
 import { parseAmountToPaise } from '../utils/money.js';
+import { isValidLoanType } from './loans.js';
 
 // Small tolerance so a timestamp taken a moment ago is never flagged as "future".
 const FUTURE_TOLERANCE_MS = 60 * 1000;
@@ -40,6 +41,14 @@ export function validateTransactionForm(form, now = Date.now()) {
     errors.direction = 'Choose whether money was paid or received.';
   }
 
+  const loanType = form.loanType ?? null;
+  if (!isValidLoanType(loanType, direction)) {
+    errors.loanType = 'Choose what this payment is.';
+  } else if (loanType && !optionalText(form.merchant)) {
+    // Loans are tracked per person, so the name is needed.
+    errors.merchant = "Enter the person's name.";
+  }
+
   if (!Number.isFinite(form.occurredAt)) {
     errors.occurredAt = 'Choose a date and time.';
   } else if (form.occurredAt > now + FUTURE_TOLERANCE_MS) {
@@ -55,6 +64,7 @@ export function validateTransactionForm(form, now = Date.now()) {
     values: {
       amountPaise: amount.paise,
       direction,
+      loanType,
       accountId: Number.isInteger(form.accountId) ? form.accountId : null,
       purpose: optionalText(form.purpose),
       categoryId: form.categoryId,

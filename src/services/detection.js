@@ -7,13 +7,15 @@ import { syncCapturedNotifications } from '../db/detected';
 export const detectionAvailable = listener.isAvailable;
 
 /**
- * Moves newly captured notifications into the database. Never throws:
- * detection is optional, so a problem here must not break the screen.
+ * Makes sure the notification reader is connected, then moves newly captured
+ * notifications into the database. Never throws: detection is optional, so a
+ * problem here must not break the screen.
  */
 export async function syncDetectedPayments(db) {
   if (!listener.isAvailable) {
     return 0;
   }
+  listener.reconnectListener();
   try {
     return await syncCapturedNotifications(db, listener);
   } catch (error) {
