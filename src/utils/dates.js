@@ -114,6 +114,57 @@ export function formatDateTime(ms) {
   return `${formatDate(ms)}, ${formatTime(ms)}`;
 }
 
+/** "1 Nov" this year, "1 Nov 2025" for another year. */
+export function formatShortDate(ms, now = new Date()) {
+  const date = new Date(ms);
+  const dayMonth = `${date.getDate()} ${MONTH_NAMES[date.getMonth()].slice(0, 3)}`;
+  return date.getFullYear() === now.getFullYear() ? dayMonth : `${dayMonth} ${date.getFullYear()}`;
+}
+
+/** "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "31st" */
+function ordinal(day) {
+  const lastTwo = day % 100;
+  if (lastTwo >= 11 && lastTwo <= 13) {
+    return `${day}th`;
+  }
+  return `${day}${{ 1: 'st', 2: 'nd', 3: 'rd' }[day % 10] ?? 'th'}`;
+}
+
+/** "31st Oct 2025" */
+export function formatOrdinalDate(ms) {
+  const date = new Date(ms);
+  return `${ordinal(date.getDate())} ${MONTH_NAMES[date.getMonth()].slice(0, 3)} ${date.getFullYear()}`;
+}
+
+/** Whole calendar days from one date to another (time of day is ignored). */
+export function daysBetween(fromMs, toMs) {
+  // Rounding handles the 23 or 25 hour days around daylight saving changes.
+  return Math.round((getDayRange(new Date(toMs)).startMs - getDayRange(new Date(fromMs)).startMs) / 86400000);
+}
+
+/**
+ * How long from one date to another, in the largest whole unit:
+ * "0 days", "1 day", "25 days", "1 month", "5 months", "1 year", "2 years".
+ * Months follow the calendar: 12 Aug to 12 Oct is 2 months, to 11 Oct is 1 month.
+ */
+export function formatDuration(fromMs, toMs) {
+  const from = new Date(fromMs);
+  const to = new Date(toMs);
+  const days = Math.max(daysBetween(fromMs, toMs), 0);
+  let months = (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+  if (to.getDate() < from.getDate()) {
+    months -= 1;
+  }
+  const count = (value, unit) => `${value} ${unit}${value === 1 ? '' : 's'}`;
+  if (months >= 12) {
+    return count(Math.floor(months / 12), 'year');
+  }
+  if (months >= 1) {
+    return count(months, 'month');
+  }
+  return count(days, 'day');
+}
+
 /** Keeps the time of `base` but takes the calendar date from `picked`. */
 export function withDateFrom(base, picked) {
   const result = new Date(base);

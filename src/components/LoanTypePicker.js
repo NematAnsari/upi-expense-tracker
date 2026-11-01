@@ -4,8 +4,9 @@ import { loanChoicesFor } from '../domain/loans';
 import { Chip } from './Chip';
 
 /**
- * "What is this?" for money paid (Expense / Lent / Paid back) or received
- * (Income / Borrowed / Got paid back). `value` is a loan type or null.
+ * "What is this?" on a review card. Money paid: Expense / I gave money / Money returned.
+ * Money received: Income / I took money / Money received back.
+ * `value` is a loan type or null.
  */
 export function LoanTypePicker({ direction, value, onChange }) {
   return (

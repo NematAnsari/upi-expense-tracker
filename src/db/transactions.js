@@ -29,6 +29,10 @@ export const SELECT_TRANSACTION = `
  * missingPurpose: only expenses with no purpose yet, so they can be filled in.
  * accountId: one bank account. direction: 'debit' (paid) or 'credit' (received).
  * loansOnly: only money lent, borrowed or paid back.
+ * person: only this name, ignoring case and spaces at the ends (as getLoanBalances matches people).
+ * kind: 'regular' (expenses and income), 'paid' (expenses), 'received' (income),
+ * 'given' (money given and received back) or 'taken' (money taken and returned).
+ * Regular, paid and received leave money given and taken out.
  */
 export async function listTransactions(db, filters = {}) {
   const {
@@ -40,6 +44,8 @@ export async function listTransactions(db, filters = {}) {
     accountId,
     direction,
     loansOnly,
+    person,
+    kind,
     sort = 'desc',
     limit,
   } = filters;
@@ -74,6 +80,20 @@ export async function listTransactions(db, filters = {}) {
   }
   if (loansOnly) {
     where.push('t.loan_type IS NOT NULL');
+  }
+  if (person != null) {
+    where.push('lower(trim(t.merchant)) = lower(trim(?))');
+    params.push(person);
+  }
+  if (kind === 'regular') {
+    where.push('t.loan_type IS NULL');
+  } else if (kind === 'paid' || kind === 'received') {
+    where.push('t.loan_type IS NULL AND t.direction = ?');
+    params.push(kind === 'paid' ? 'debit' : 'credit');
+  } else if (kind === 'given') {
+    where.push("t.loan_type IN ('lent', 'lent_repaid')");
+  } else if (kind === 'taken') {
+    where.push("t.loan_type IN ('borrowed', 'borrowed_repaid')");
   }
 
   const order = sort === 'asc' ? 'ASC' : 'DESC';
@@ -152,4 +172,24 @@ export async function updateTransaction(db, id, values) {
 
 export async function deleteTransaction(db, id) {
   await db.runAsync('DELETE FROM transactions WHERE id = ?', [id]);
+}
+
+/**
+ * Renames a person on all their money given and taken entries (matched like
+ * getLoanBalances: ignoring case and spaces at the ends). When the new name is
+ * already someone else's, their entries end up together: that is a merge.
+ * Expenses and income with the same name are not touched.
+ * Returns how many entries changed.
+ */
+export async function renamePerson(db, oldName, newName) {
+  const name = newName.trim().replace(/\s+/g, ' ');
+  if (!name) {
+    throw new Error('Enter a name.');
+  }
+  const result = await db.runAsync(
+    `UPDATE transactions SET merchant = ?, updated_at = ?
+     WHERE loan_type IS NOT NULL AND lower(trim(merchant)) = lower(trim(?))`,
+    [name, Date.now(), oldName],
+  );
+  return result.changes;
 }

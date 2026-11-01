@@ -20,6 +20,10 @@ export const colors = {
   expenseSoft: '#FDECEA',
   income: '#2E7D32',
   incomeSoft: '#E8F5E9',
+  // Money given and taken: a quiet accent for its labels only. Its amounts
+  // still follow the red paid / green received rule.
+  people: '#4A5A9C',
+  peopleSoft: '#EEF0F8',
 
   // Status messages (e.g. "Notification access is ON") and errors/destructive
   // actions such as delete. Not for amounts.
@@ -45,6 +49,8 @@ export const radius = {
 };
 
 export const fontSize = {
+  // Only for small labels next to a bigger amount (e.g. "left to receive").
+  xs: 11,
   sm: 13,
   md: 15,
   lg: 17,

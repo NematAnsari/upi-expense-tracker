@@ -50,6 +50,8 @@ Installing a new build: open the download link on the phone and tap **Update**.
 
 ```bash
 npm start              # start the dev server
+npm run start:go       # try screens in Expo Go (own empty database; detection does not work there)
+npm run start:go:tunnel  # same, when the phone cannot connect over Wi-Fi
 npm test               # run all tests (Node, no phone needed)
 npm run lint           # check code for problems
 npm run format         # format all code with Prettier
@@ -62,11 +64,13 @@ npx expo-doctor        # check package versions match the Expo SDK
 ```
 src/
   app/            Screens. Expo Router turns each file into a route (history.js -> /history).
-    (tabs)/       The bottom tabs: Dashboard (index.js), History, Reports.
+    (tabs)/       The bottom tabs: Expenses (index.js), Given & Taken (given-taken.js), Reports, More.
+    history.js           All expenses and income, with search and filters (opened from Expenses and More).
     transaction/  Add (new.js) and Edit ([id].js) a transaction.
     review-payments.js   Payments detected from bank SMS, waiting for Add or Ignore.
     auto-detect.js       Notification access, battery and alert settings.
     accounts.js          Rename bank accounts.
+    loan/[person].js     One person's totals, remaining amount and history, with a record-return button.
     _layout.js    Opens the database, runs migrations, sets up navigation.
   components/     Reusable UI pieces (Amount, TransactionRow, TransactionForm, cards, chips...).
   constants/      Theme (colours, spacing, font sizes) and fixed lists (default categories).
@@ -91,8 +95,11 @@ tests/            Node tests for money, dates, parsing and all database logic.
   (or `amountColor()` from the theme) for every amount shown on screen.
 - **Direction**: `'debit'` = money paid (an expense), `'credit'` = money received (income).
   Income is never counted as spending.
-- **Loans** (`loan_type`: lent, borrowed, lent_repaid, borrowed_repaid) are not spending or income. They are left
-  out of those totals and summed per person on the Loans screen (matched by name, ignoring case).
+- **Money given and taken** (`loan_type`: lent, borrowed, lent_repaid, borrowed_repaid) is not spending or income.
+  It is left out of those totals and summed per person (matched by name, ignoring case). Money received back or
+  returned cannot be more than the person's remaining amount (`checkReturnAmount` in `src/db/reports.js`).
+- **On-screen words** for these come from `src/domain/loans.js`. The app never shows the words loan, lend, borrow,
+  owe or repay; it says "I gave money", "I took money", "Money to receive", "Money to return" and so on.
 - **Dates** are stored as UTC milliseconds and shown in the phone's local time.
 - **SQL** always uses `?` placeholders, never string concatenation.
 - **Database changes** go in a new migration at the end of `src/db/migrations.js`. Never edit a shipped one.

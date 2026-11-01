@@ -4,6 +4,7 @@ import {
   formatDateTime,
   formatDayLabel,
   formatMonthLabel,
+  formatShortDate,
   getDayRange,
   getMonthKey,
   getMonthRange,
@@ -68,6 +69,13 @@ test('formats date and time in 12-hour local time', () => {
   assert.equal(formatDateTime(new Date(2026, 9, 25, 15, 5).getTime()), '25 Oct 2026, 3:05 PM');
   assert.equal(formatDateTime(new Date(2026, 0, 1, 0, 0).getTime()), '1 Jan 2026, 12:00 AM');
   assert.equal(formatDateTime(new Date(2026, 0, 1, 12, 30).getTime()), '1 Jan 2026, 12:30 PM');
+});
+
+test('short dates leave out the year only for the current year', () => {
+  const now = new Date(2026, 10, 1);
+  assert.equal(formatShortDate(new Date(2026, 10, 1, 15).getTime(), now), '1 Nov');
+  assert.equal(formatShortDate(new Date(2026, 0, 31).getTime(), now), '31 Jan');
+  assert.equal(formatShortDate(new Date(2025, 11, 31).getTime(), now), '31 Dec 2025');
 });
 
 test('day labels: Today, Yesterday, then dates (month and year boundaries)', () => {

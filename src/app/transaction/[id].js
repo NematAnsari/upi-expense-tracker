@@ -6,6 +6,7 @@ import { TransactionForm } from '../../components/TransactionForm';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
 import { listAccounts } from '../../db/accounts';
 import { listCategories } from '../../db/categories';
+import { checkReturnAmount, getLoanBalances } from '../../db/reports';
 import { deleteTransaction, getTransaction, updateTransaction } from '../../db/transactions';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
 import { confirmDeleteTransaction } from '../../ui/confirmDelete';
@@ -20,14 +21,21 @@ export default function EditTransactionScreen() {
   const transactionId = Number(id);
 
   const loader = useCallback(async () => {
-    const [transaction, categories, accounts] = await Promise.all([
+    const [transaction, categories, accounts, balances] = await Promise.all([
       getTransaction(db, transactionId),
       listCategories(db),
       listAccounts(db),
+      getLoanBalances(db),
     ]);
-    return { transaction, categories, accounts };
+    return { transaction, categories, accounts, people: balances.people.map((candidate) => candidate.person) };
   }, [db, transactionId]);
   const { data, error, reload } = useFocusQuery(loader);
+
+  // The entry's own old amount is left out, so it can be edited within the remaining amount.
+  async function checkBeforeSave(values) {
+    const message = await checkReturnAmount(db, values, transactionId);
+    return message ? { amount: message } : null;
+  }
 
   async function handleSubmit(values) {
     await updateTransaction(db, transactionId, values);
@@ -66,13 +74,14 @@ export default function EditTransactionScreen() {
     );
   }
 
-  const { transaction, categories, accounts } = data;
+  const { transaction, categories, accounts, people } = data;
   return (
     <TransactionForm
       // Remount the form if a different transaction loads, so it shows fresh values.
       key={transaction.id}
       categories={categories}
       accounts={accounts}
+      knownPeople={people}
       initialValues={{
         amountText: paiseToInputString(transaction.amountPaise),
         direction: transaction.direction,
@@ -89,6 +98,7 @@ export default function EditTransactionScreen() {
       submitLabel="Save changes"
       onSubmit={handleSubmit}
       onDelete={handleDelete}
+      checkBeforeSave={checkBeforeSave}
     />
   );
 }

@@ -52,6 +52,25 @@ export function createEmptyTransactionForm(lastPaymentMethod) {
   };
 }
 
+/**
+ * The four answers to "What happened?" on the form. Each one is a direction
+ * plus an optional loan type. Money received back and money returned are
+ * recorded from a person's page instead, so they are not in this list.
+ */
+export const ACTIVITIES = [
+  { key: 'paid', label: 'I paid money', direction: 'debit', loanType: null },
+  { key: 'received', label: 'I received money', direction: 'credit', loanType: null },
+  { key: 'gave', label: 'I gave money', direction: 'debit', loanType: 'lent' },
+  { key: 'took', label: 'I took money', direction: 'credit', loanType: 'borrowed' },
+];
+
+/** The activity a form is showing, or null for money received back / returned. */
+export function activityFor(form) {
+  const direction = form.direction ?? 'debit';
+  const loanType = form.loanType ?? null;
+  return ACTIVITIES.find((activity) => activity.direction === direction && activity.loanType === loanType) ?? null;
+}
+
 /** Categories you can pick by hand. "Loans" is set automatically for loans, so it is not offered. */
 export function pickableCategories(categories) {
   return categories.filter((category) => category.name.toLowerCase() !== LOANS_CATEGORY.toLowerCase());

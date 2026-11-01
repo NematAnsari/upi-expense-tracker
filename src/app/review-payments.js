@@ -22,7 +22,8 @@ import {
 } from '../db/detected';
 import { useFocusQuery } from '../hooks/useFocusQuery';
 import { syncDetectedPayments } from '../services/detection';
-import { loanLabel } from '../domain/loans';
+import { checkReturnAmount, getLoanBalances } from '../db/reports';
+import { describeNet, loanLabel, maxReturnPaise, suggestLoanType } from '../domain/loans';
 import { categoryIdForSave } from '../domain/transactionForm';
 import { formatDayLabel } from '../utils/dates';
 import { formatINR } from '../utils/money';
@@ -46,7 +47,8 @@ export default function ReviewPaymentsScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  // Choices made on a card before tapping Add (item id -> category id / loan type).
+  // Choices made on a card before tapping Add (item id -> category id / loan type,
+  // which is how "What is this?" is stored).
   const [categoryChoices, setCategoryChoices] = useState({});
   const [loanChoices, setLoanChoices] = useState({});
   const [undoAction, setUndoAction] = useState(null);
@@ -54,8 +56,14 @@ export default function ReviewPaymentsScreen() {
 
   const loader = useCallback(async () => {
     await syncDetectedPayments(db);
-    const categories = await listCategories(db);
-    const items = await listPendingDetected(db, categories);
+    const [categories, balances] = await Promise.all([listCategories(db), getLoanBalances(db)]);
+    const pending = await listPendingDetected(db, categories);
+    // Money from (or to) someone with an open amount is probably money back: suggest it.
+    // Possible duplicates hide the choice on their card, so they never get a hidden suggestion.
+    const items = pending.map((item) => ({
+      ...item,
+      suggestion: item.possibleDuplicate ? null : suggestLoanType(item, balances.people),
+    }));
     return { categories, items };
   }, [db]);
   const { data, error, reload } = useFocusQuery(loader);
@@ -93,9 +101,26 @@ export default function ReviewPaymentsScreen() {
     }
   }
 
+  /** "What is this?" for an item: your choice on the card, else the suggestion, else expense/income. */
+  function loanTypeOf(item) {
+    return item.id in loanChoices ? loanChoices[item.id] : (item.suggestion?.loanType ?? null);
+  }
+
+  /** Why the card picked money back for you, shown while that suggestion is selected. */
+  function suggestionNote(item) {
+    const { suggestion } = item;
+    if (!suggestion || loanTypeOf(item) !== suggestion.loanType) {
+      return null;
+    }
+    const remaining = describeNet(suggestion.person.netPaise);
+    return suggestion.loanType === 'lent_repaid'
+      ? `${suggestion.person.person} has ${remaining}, so this is marked as Money received back. Change it if needed.`
+      : `You have ${remaining} to ${suggestion.person.person}, so this is marked as Money returned. Change it if needed.`;
+  }
+
   /** The transaction an item becomes with the choices made on its card. */
   function transactionFor(item) {
-    const loanType = loanChoices[item.id] ?? null;
+    const loanType = loanTypeOf(item);
     const categoryId = categoryIdForSave(
       { loanType, categoryId: categoryChoices[item.id] ?? item.suggestedCategoryId },
       data.categories,
@@ -103,20 +128,45 @@ export default function ReviewPaymentsScreen() {
     return detectedToTransaction(item, categoryId, loanType);
   }
 
-  /** Ready for one-tap Add: not a possible duplicate, has a category, and a loan has a name. */
+  /**
+   * Ready for "Add all": not a possible duplicate, has a category, money given or
+   * taken has a name, and it is not money received back or returned (those are
+   * checked against the remaining amount one at a time).
+   */
   function isReady(item) {
     const values = transactionFor(item);
-    return !item.possibleDuplicate && values.categoryId != null && (!values.loanType || Boolean(item.counterparty));
+    return (
+      !item.possibleDuplicate &&
+      values.categoryId != null &&
+      (!values.loanType || Boolean(item.counterparty)) &&
+      maxReturnPaise(values.loanType, 0) === null
+    );
   }
 
-  function handleAdd(item) {
+  async function handleAdd(item) {
     const values = transactionFor(item);
+    // Money received back or returned cannot be more than the remaining amount.
+    let tooMuch = null;
+    try {
+      tooMuch = await checkReturnAmount(db, values);
+    } catch (checkError) {
+      console.error(checkError);
+      Alert.alert('Something went wrong', checkError.message || 'Please try again.');
+      return;
+    }
+    if (tooMuch) {
+      Alert.alert('Check the amount', `${tooMuch}\n\nUse Review details to change it, or choose another option.`, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Review details', onPress: () => handleEdit(item) },
+      ]);
+      return;
+    }
     const kind = values.loanType ? loanLabel(values.loanType) : item.direction === 'credit' ? 'Income' : 'Expense';
     const save = () =>
       runWithUndo(
         () => addDetectedAsTransaction(db, item.id, values),
         () => undoAddDetected(db, item.id),
-        `${kind} added: ${formatINR(item.amountPaise)}`,
+        `Added: ${kind}, ${formatINR(item.amountPaise)}`,
       );
 
     if (item.possibleDuplicate) {
@@ -144,7 +194,7 @@ export default function ReviewPaymentsScreen() {
   const handleEdit = (item) =>
     router.push({
       pathname: '/transaction/new',
-      params: { detectedId: item.id, loanType: loanChoices[item.id] ?? '' },
+      params: { detectedId: item.id, loanType: loanTypeOf(item) ?? '' },
     });
 
   /** Adds every ready item with the choices shown on its card. */
@@ -158,7 +208,7 @@ export default function ReviewPaymentsScreen() {
       `Add ${ready.length} ${ready.length === 1 ? 'payment' : 'payments'}?`,
       `They are saved with the categories shown on each card.${
         skipped > 0
-          ? ` ${skipped} ${skipped === 1 ? 'payment needs' : 'payments need'} a check first (possible duplicate or missing name).`
+          ? ` ${skipped} ${skipped === 1 ? 'payment needs' : 'payments need'} a check first (possible duplicate, missing name, or money received back or returned).`
           : ''
       }`,
       [
@@ -236,7 +286,8 @@ export default function ReviewPaymentsScreen() {
             categories={data.categories}
             categoryId={categoryChoices[item.id] ?? item.suggestedCategoryId}
             onChangeCategory={(id) => setCategoryChoices((current) => ({ ...current, [item.id]: id }))}
-            loanType={loanChoices[item.id] ?? null}
+            loanType={loanTypeOf(item)}
+            suggestionNote={suggestionNote(item)}
             onChangeLoanType={(value) => setLoanChoices((current) => ({ ...current, [item.id]: value }))}
             busy={busy}
             onAdd={() => handleAdd(item)}

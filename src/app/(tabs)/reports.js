@@ -1,6 +1,8 @@
 // Monthly report: totals, comparison with last month, highest and average
 // expense, spending per category and per week. Amounts: red paid, green received.
+// Money given and taken is never part of these; it gets its own card at the end.
 
+import { useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -10,7 +12,9 @@ import { CategoryBreakdown } from '../../components/CategoryBreakdown';
 import { MonthSelector } from '../../components/MonthSelector';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
 import { colors, fontSize, spacing } from '../../constants/theme';
-import { getMonthlyReport } from '../../db/reports';
+import { TextLink } from '../../components/TextLink';
+import { getLoanBalances, getMonthlyReport } from '../../db/reports';
+import { BALANCE_TEXT } from '../../domain/loans';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
 import { formatDateTime, formatMonthLabel, getMonthKey } from '../../utils/dates';
 import { formatPercent } from '../../utils/money';
@@ -66,7 +70,11 @@ export default function ReportsScreen() {
   const db = useSQLiteContext();
   const [monthKey, setMonthKey] = useState(getMonthKey());
 
-  const loader = useCallback(() => getMonthlyReport(db, monthKey), [db, monthKey]);
+  const router = useRouter();
+  const loader = useCallback(async () => {
+    const [monthly, people] = await Promise.all([getMonthlyReport(db, monthKey), getLoanBalances(db)]);
+    return { ...monthly, people };
+  }, [db, monthKey]);
   const { data: report, error, reload } = useFocusQuery(loader);
 
   return (
@@ -139,6 +147,26 @@ export default function ReportsScreen() {
               </Card>
             </>
           )}
+
+          {/* Kept apart from the spending figures above: these are not spending or income. */}
+          {report.people.people.length > 0 ? (
+            <Card
+              title="Money given and taken"
+              right={<TextLink label="Details" onPress={() => router.navigate('/given-taken')} />}
+            >
+              <View style={styles.totalsRow}>
+                <View style={styles.totalColumn}>
+                  <Text style={styles.label}>{BALANCE_TEXT.owesYou}</Text>
+                  <Amount paise={report.people.owedToYouPaise} direction="credit" size="lg" />
+                </View>
+                <View style={styles.totalColumn}>
+                  <Text style={styles.label}>{BALANCE_TEXT.youOwe}</Text>
+                  <Amount paise={report.people.youOwePaise} direction="debit" size="lg" />
+                </View>
+              </View>
+              <Text style={styles.peopleNote}>All time. Not included in the spending and income figures.</Text>
+            </Card>
+          ) : null}
         </>
       ) : null}
     </ScrollView>
@@ -179,4 +207,5 @@ const styles = StyleSheet.create({
   weekLabel: { flex: 1, fontSize: fontSize.md, color: colors.text },
   weekCount: { fontSize: fontSize.sm, color: colors.textMuted },
   weekAmount: { width: 110, textAlign: 'right' },
+  peopleNote: { fontSize: fontSize.sm, color: colors.textMuted, marginTop: spacing.md },
 });

@@ -3,10 +3,18 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { listCategories } from '../src/db/categories.js';
 import { LATEST_VERSION, MIGRATIONS, migrateDbIfNeeded } from '../src/db/migrations.js';
-import { getDashboardData, getLoanBalances, getMonthlyReport } from '../src/db/reports.js';
+import { checkReturnAmount, getDashboardData, getLoanBalances, getMonthlyReport } from '../src/db/reports.js';
 import { createTransaction, listTransactions } from '../src/db/transactions.js';
-import { describeBalance, isValidLoanType, loanChoicesFor } from '../src/domain/loans.js';
-import { categoryIdForSave, pickableCategories } from '../src/domain/transactionForm.js';
+import {
+  activityTitle,
+  balanceParts,
+  describeBalance,
+  isValidLoanType,
+  loanChoicesFor,
+  personLists,
+  repaymentFor,
+} from '../src/domain/loans.js';
+import { activityFor, categoryIdForSave, pickableCategories } from '../src/domain/transactionForm.js';
 import { validateTransactionForm } from '../src/domain/validation.js';
 import { createTestDatabase, wrapDatabase } from './helpers/testDatabase.js';
 
@@ -81,9 +89,33 @@ test('loans are not counted as spending or income', async () => {
   assert.equal(dashboard.todayTotals.totalPaise, 30000);
   assert.equal(dashboard.receivedTotals.totalPaise, 100000);
   assert.equal(dashboard.missingPurposeCount, 1, 'only the real expense needs a purpose');
-  assert.equal(dashboard.recent.length, 5, 'loans still show in the latest list');
+  assert.equal(dashboard.recent.length, 2, 'the Expenses tab lists expenses and income only');
 
   assert.equal((await listTransactions(db, { loansOnly: true })).length, 3);
+
+  // History chips: Paid and Received leave money given and taken out.
+  const kinds = async (kind) => (await listTransactions(db, { kind })).map((t) => t.amountPaise);
+  assert.deepEqual(await kinds('paid'), [30000]);
+  assert.deepEqual(await kinds('received'), [100000]);
+  assert.deepEqual((await kinds('given')).sort(), [10000, 50000]); // gave + received back
+  assert.deepEqual(await kinds('taken'), [20000]);
+  assert.equal((await listTransactions(db, {})).length, 5);
+});
+
+test('row titles say what happened in plain words', () => {
+  const row = (fields) => activityTitle({ direction: 'debit', loanType: null, categoryName: 'Other', ...fields });
+  assert.equal(row({ merchant: 'XYZ Store' }), 'Paid to XYZ Store');
+  assert.equal(row({ direction: 'credit', merchant: 'Rahul' }), 'Received from Rahul');
+  assert.equal(row({ loanType: 'lent', merchant: 'Amit' }), 'Gave money to Amit');
+  assert.equal(row({ direction: 'credit', loanType: 'borrowed', merchant: 'Sameer' }), 'Took money from Sameer');
+  assert.equal(
+    row({ direction: 'credit', loanType: 'lent_repaid', merchant: 'Rahul' }),
+    'Money received back from Rahul',
+  );
+  assert.equal(row({ loanType: 'borrowed_repaid', merchant: 'Amit' }), 'Money returned to Amit');
+  assert.equal(row({ purpose: 'Tea' }), 'Tea', 'no name: the purpose');
+  assert.equal(row({}), 'Other', 'no name or purpose: the category');
+  assert.equal(row({ loanType: 'lent', categoryName: 'Loans' }), 'Gave money', 'never the internal category');
 });
 
 test('loan balances per person, matched by name ignoring case and spaces', async () => {
@@ -105,6 +137,53 @@ test('loan balances per person, matched by name ignoring case and spaces', async
   assert.equal(balances.owedToYouPaise, 30000);
   assert.equal(balances.youOwePaise, 20000);
   assert.equal(balances.people.at(-1).status, 'settled', 'settled people are listed last');
+
+  // One person's entries, matched the same way (the person screen uses this).
+  const ravi = await listTransactions(db, { loansOnly: true, person: 'Ravi' });
+  assert.deepEqual(
+    ravi.map((t) => t.loanType),
+    ['lent_repaid', 'lent'],
+  );
+});
+
+test('per-person totals and the remaining-amount check for money back', async () => {
+  const { db, add } = await setup();
+  await add(500000, 'debit', { loanType: 'lent', merchant: 'Rahul', day: 1 }); // gave ₹5,000
+  const backId = await add(200000, 'credit', { loanType: 'lent_repaid', merchant: 'rahul', day: 2 }); // ₹2,000 back
+  await add(1000000, 'credit', { loanType: 'borrowed', merchant: 'Amit', day: 3 }); // took ₹10,000
+
+  const rahul = (await getLoanBalances(db)).people.find((p) => p.person.toLowerCase() === 'rahul');
+  assert.deepEqual(
+    [rahul.givenPaise, rahul.receivedBackPaise, rahul.takenPaise, rahul.returnedPaise, rahul.amountPaise],
+    [500000, 200000, 0, 0, 300000],
+  );
+  assert.deepEqual(
+    balanceParts(rahul).map((part) => part.label),
+    ['Total given', 'Received back'],
+  );
+
+  // Given & Taken tab lists: an open amount decides; settled people go where they had entries.
+  assert.deepEqual(personLists(rahul), ['given']);
+  assert.deepEqual(personLists({ status: 'youOwe' }), ['taken']);
+  assert.deepEqual(personLists({ status: 'settled', givenPaise: 100, takenPaise: 0 }), ['given']);
+  assert.deepEqual(personLists({ status: 'settled', givenPaise: 100, takenPaise: 50 }), ['given', 'taken']);
+
+  const money = (paise, loanType, merchant) => ({ amountPaise: paise, loanType, merchant });
+  // Up to the remaining amount is fine, partial amounts too.
+  assert.equal(await checkReturnAmount(db, money(300000, 'lent_repaid', 'Rahul')), null);
+  assert.equal(await checkReturnAmount(db, money(100, 'lent_repaid', 'Rahul')), null);
+  // More than remaining is blocked.
+  assert.match(await checkReturnAmount(db, money(300001, 'lent_repaid', 'Rahul')), /Remaining amount is ₹3,000\.00/);
+  // Wrong side: Rahul has nothing for you to return.
+  assert.match(await checkReturnAmount(db, money(100, 'borrowed_repaid', 'Rahul')), /no money to return to Rahul/);
+  assert.equal(await checkReturnAmount(db, money(1000000, 'borrowed_repaid', 'Amit')), null);
+  assert.match(await checkReturnAmount(db, money(100, 'lent_repaid', 'Nobody')), /no money to return to you/);
+  // Editing an entry leaves its old amount out: ₹2,000 can become ₹5,000, not more.
+  assert.equal(await checkReturnAmount(db, money(500000, 'lent_repaid', 'Rahul'), backId), null);
+  assert.ok(await checkReturnAmount(db, money(500001, 'lent_repaid', 'Rahul'), backId));
+  // Other kinds are never limited.
+  assert.equal(await checkReturnAmount(db, money(99999999, 'lent', 'Rahul')), null);
+  assert.equal(await checkReturnAmount(db, money(99999999, null, 'Rahul')), null);
 });
 
 test('loan validation: direction must match and the person is required', () => {
@@ -133,17 +212,28 @@ test('loan choices, Loans category handling and balance wording', async () => {
   const { categories } = await setup();
   assert.deepEqual(
     loanChoicesFor('debit').map((c) => c.label),
-    ['Expense', 'Lent', 'Paid back'],
+    ['Expense', 'I gave money', 'Money returned'],
   );
   assert.deepEqual(
     loanChoicesFor('credit').map((c) => c.label),
-    ['Income', 'Borrowed', 'Got paid back'],
+    ['Income', 'I took money', 'Money received back'],
   );
+  assert.equal(repaymentFor('owesYou'), 'lent_repaid');
+  assert.equal(repaymentFor('youOwe'), 'borrowed_repaid');
+  assert.equal(repaymentFor('settled'), null);
 
   assert.ok(!pickableCategories(categories).some((c) => c.name === 'Loans'));
   const loansId = categories.find((c) => c.name === 'Loans').id;
   assert.equal(categoryIdForSave({ loanType: 'lent', categoryId: 3 }, categories), loansId);
   assert.equal(categoryIdForSave({ loanType: null, categoryId: 3 }, categories), 3);
+
+  // "What happened?" answers map to direction + loan type; returns are not among them.
+  assert.equal(activityFor({ direction: 'debit', loanType: null }).key, 'paid');
+  assert.equal(activityFor({ direction: 'credit', loanType: null }).key, 'received');
+  assert.equal(activityFor({ direction: 'debit', loanType: 'lent' }).key, 'gave');
+  assert.equal(activityFor({ direction: 'credit', loanType: 'borrowed' }).key, 'took');
+  assert.equal(activityFor({}).key, 'paid', 'a new form starts as money paid');
+  assert.equal(activityFor({ direction: 'credit', loanType: 'lent_repaid' }), null);
 
   assert.deepEqual(describeBalance(500), { status: 'owesYou', amountPaise: 500 });
   assert.deepEqual(describeBalance(-500), { status: 'youOwe', amountPaise: 500 });

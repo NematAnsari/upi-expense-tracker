@@ -3,9 +3,9 @@
 // Loans (money lent, borrowed or paid back) are neither spending nor income,
 // so they are left out of both; see getLoanBalances for them.
 
-import { describeBalance } from '../domain/loans.js';
+import { describeBalance, maxReturnPaise, settlementDates } from '../domain/loans.js';
 import { getDayRange, getMonthRange, getWeekBuckets, shiftMonth } from '../utils/dates.js';
-import { averagePaise, percentOf } from '../utils/money.js';
+import { averagePaise, formatINR, percentOf } from '../utils/money.js';
 import { SELECT_TRANSACTION, listTransactions } from './transactions.js';
 
 const IN_RANGE = "t.direction = 'debit' AND t.loan_type IS NULL AND t.occurred_at >= ? AND t.occurred_at < ?";
@@ -79,33 +79,96 @@ export async function getReceivedTotals(db, startMs, endMs) {
   return { totalPaise: row?.totalPaise ?? 0, count: row?.count ?? 0 };
 }
 
+// Net per person: above 0 they have money to return to you, below 0 you have money to return to them.
+const NET_PAISE = `SUM(CASE loan_type
+       WHEN 'lent' THEN amount_paise
+       WHEN 'lent_repaid' THEN -amount_paise
+       WHEN 'borrowed' THEN -amount_paise
+       WHEN 'borrowed_repaid' THEN amount_paise
+     END)`;
+
+/**
+ * One person's net amount (same rule and name matching as getLoanBalances),
+ * leaving out one entry (the one being edited) when excludeId is given.
+ */
+export async function getPersonNetPaise(db, person, excludeId = null) {
+  const row = await db.getFirstAsync(
+    `SELECT COALESCE(${NET_PAISE}, 0) AS netPaise
+     FROM transactions
+     WHERE loan_type IS NOT NULL AND lower(trim(merchant)) = lower(trim(?)) AND id IS NOT ?`,
+    [person, excludeId],
+  );
+  return row?.netPaise ?? 0;
+}
+
+/**
+ * Money received back or returned cannot be more than the person's remaining
+ * amount. Returns an error message for the amount field, or null when it is fine.
+ * excludeId: the entry being edited, so its old amount is not counted twice.
+ */
+export async function checkReturnAmount(db, values, excludeId = null) {
+  if (values.loanType !== 'lent_repaid' && values.loanType !== 'borrowed_repaid') {
+    return null;
+  }
+  const netPaise = await getPersonNetPaise(db, values.merchant, excludeId);
+  const maxPaise = maxReturnPaise(values.loanType, netPaise);
+  if (values.amountPaise <= maxPaise) {
+    return null;
+  }
+  if (maxPaise === 0) {
+    return values.loanType === 'lent_repaid'
+      ? `${values.merchant} has no money to return to you.`
+      : `You have no money to return to ${values.merchant}.`;
+  }
+  return `Remaining amount is ${formatINR(maxPaise)}. Enter ${formatINR(maxPaise)} or less.`;
+}
+
 /**
  * Loan balance per person, from all time (loans do not belong to one month).
  * People are matched by name, ignoring case and spaces at the ends.
- * Returns { people: [{ person, netPaise, status, amountPaise, lastAt, count }],
+ * Returns { people: [{ person, netPaise, status, amountPaise, lastAt, count,
+ *           givenPaise, receivedBackPaise, takenPaise, returnedPaise,
+ *           openSinceAt, settledAt, settledFromAt }],
  *           owedToYouPaise, youOwePaise }.
+ * openSinceAt / settledAt / settledFromAt: see settlementDates in domain/loans.js.
  * Settled people (net 0) are listed last.
  */
 export async function getLoanBalances(db) {
   // With MAX(occurred_at), SQLite takes `merchant` (the spelling) from the latest entry.
+  // `key` is the same lower(trim()) SQLite uses to group, so both queries match people alike.
   const rows = await db.getAllAsync(
     `SELECT
+       lower(trim(merchant)) AS key,
        merchant AS person,
-       SUM(CASE loan_type
-             WHEN 'lent' THEN amount_paise
-             WHEN 'lent_repaid' THEN -amount_paise
-             WHEN 'borrowed' THEN -amount_paise
-             WHEN 'borrowed_repaid' THEN amount_paise
-           END) AS netPaise,
+       ${NET_PAISE} AS netPaise,
+       SUM(CASE WHEN loan_type = 'lent' THEN amount_paise ELSE 0 END) AS givenPaise,
+       SUM(CASE WHEN loan_type = 'lent_repaid' THEN amount_paise ELSE 0 END) AS receivedBackPaise,
+       SUM(CASE WHEN loan_type = 'borrowed' THEN amount_paise ELSE 0 END) AS takenPaise,
+       SUM(CASE WHEN loan_type = 'borrowed_repaid' THEN amount_paise ELSE 0 END) AS returnedPaise,
        MAX(occurred_at) AS lastAt,
        COUNT(*) AS count
      FROM transactions
      WHERE loan_type IS NOT NULL AND merchant IS NOT NULL AND trim(merchant) <> ''
      GROUP BY lower(trim(merchant))`,
   );
+  const entries = await db.getAllAsync(
+    `SELECT id, lower(trim(merchant)) AS key, loan_type AS loanType, amount_paise AS amountPaise,
+            occurred_at AS occurredAt
+     FROM transactions
+     WHERE loan_type IS NOT NULL AND merchant IS NOT NULL AND trim(merchant) <> ''`,
+  );
+  const entriesByKey = {};
+  for (const entry of entries) {
+    (entriesByKey[entry.key] ??= []).push(entry);
+  }
 
   const people = rows
-    .map((row) => ({ ...row, person: row.person.trim(), ...describeBalance(row.netPaise) }))
+    .map(({ key, ...row }) => ({
+      ...row,
+      person: row.person.trim(),
+      ...describeBalance(row.netPaise),
+      ...settlementDates(entriesByKey[key] ?? []),
+    }))
     .sort((a, b) => (a.status === 'settled') - (b.status === 'settled') || b.lastAt - a.lastAt);
 
   return {
@@ -124,7 +187,8 @@ export async function getDashboardData(db, monthKey, now = new Date()) {
     getSpendingTotals(db, today.startMs, today.endMs),
     getReceivedTotals(db, month.startMs, month.endMs),
     getCategoryTotals(db, month.startMs, month.endMs),
-    listTransactions(db, { startMs: month.startMs, endMs: month.endMs, limit: 5 }),
+    // Expenses and income only: money given and taken has its own tab.
+    listTransactions(db, { startMs: month.startMs, endMs: month.endMs, kind: 'regular', limit: 5 }),
     countMissingPurpose(db, month.startMs, month.endMs),
   ]);
 
