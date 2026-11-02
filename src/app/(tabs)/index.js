@@ -32,6 +32,7 @@ import { useDeleteTransaction } from '../../hooks/useDeleteTransaction';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
 import { syncDetectedPayments } from '../../services/detection';
 import { formatMonthLabel, getMonthKey, getMonthRange } from '../../utils/dates';
+import { formatINR } from '../../utils/money';
 
 // Below this many entries the month fits on a screen, so no search box is shown.
 const SEARCH_FROM = 6;
@@ -51,6 +52,11 @@ const SORTS = [
 
 function plural(count, one, many) {
   return `${count} ${count === 1 ? one : many}`;
+}
+
+/** The tiles' last line in the current month: "Today ₹200.00" (count in a pill) or "Nothing today". */
+function todayText(paise) {
+  return paise > 0 ? `Today ${formatINR(paise)}` : 'Nothing today';
 }
 
 export default function ExpensesScreen() {
@@ -134,6 +140,9 @@ export default function ExpensesScreen() {
   // Filtered on the phone, so typing in search is instant. The sheet's filters
   // come first, so the tab counts follow them.
   const filterCount = countFilters(filters);
+  // Today's totals only make sense while looking at the current month; past
+  // months show just the count by the tile's title.
+  const thisMonth = monthKey === getMonthKey();
   const entries = (data?.entries ?? []).filter(
     (entry) =>
       (filters.categoryId == null || entry.categoryId === filters.categoryId) &&
@@ -179,20 +188,24 @@ export default function ExpensesScreen() {
           <View style={styles.totals}>
             <TotalTile
               label="Spent"
+              count={data.monthTotals.count}
               paise={data.monthTotals.totalPaise}
               direction="debit"
               action="Add expense"
               zeroText="Nothing spent"
-              subText={plural(data.monthTotals.count, 'expense', 'expenses')}
+              subText={thisMonth ? todayText(data.todayTotals.totalPaise) : null}
+              subCount={data.todayTotals.count}
               onPress={() => addNew({})}
             />
             <TotalTile
               label="Received"
+              count={data.receivedTotals.count}
               paise={data.receivedTotals.totalPaise}
               direction="credit"
               action="Add income"
               zeroText="Nothing received"
-              subText={plural(data.receivedTotals.count, 'entry', 'entries')}
+              subText={thisMonth ? todayText(data.todayReceived.totalPaise) : null}
+              subCount={data.todayReceived.count}
               onPress={() => addNew({ direction: 'credit' })}
             />
           </View>

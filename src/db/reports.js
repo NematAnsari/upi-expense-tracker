@@ -129,11 +129,12 @@ export async function checkReturnAmount(db, values, excludeId = null) {
  * Returns { people: [{ person, netPaise, status, amountPaise, lastAt, count,
  *           givenPaise, receivedBackPaise, takenPaise, returnedPaise,
  *           openSinceAt, settledAt, settledFromAt }],
- *           owedToYouPaise, youOwePaise }.
+ *           owedToYouPaise, youOwePaise, givenTodayPaise, takenTodayPaise }.
+ * givenTodayPaise / takenTodayPaise: money given and taken today (by `now`).
  * openSinceAt / settledAt / settledFromAt: see settlementDates in domain/loans.js.
  * Settled people (net 0) are listed last.
  */
-export async function getLoanBalances(db) {
+export async function getLoanBalances(db, now = new Date()) {
   // With MAX(occurred_at), SQLite takes `merchant` (the spelling) from the latest entry.
   // `key` is the same lower(trim()) SQLite uses to group, so both queries match people alike.
   const rows = await db.getAllAsync(
@@ -171,10 +172,20 @@ export async function getLoanBalances(db) {
     }))
     .sort((a, b) => (a.status === 'settled') - (b.status === 'settled') || b.lastAt - a.lastAt);
 
+  const today = getDayRange(now);
+  const todayTotal = (loanType) =>
+    entries
+      .filter(
+        (entry) => entry.loanType === loanType && entry.occurredAt >= today.startMs && entry.occurredAt < today.endMs,
+      )
+      .reduce((sum, entry) => sum + entry.amountPaise, 0);
+
   return {
     people,
     owedToYouPaise: people.filter((p) => p.status === 'owesYou').reduce((sum, p) => sum + p.amountPaise, 0),
     youOwePaise: people.filter((p) => p.status === 'youOwe').reduce((sum, p) => sum + p.amountPaise, 0),
+    givenTodayPaise: todayTotal('lent'),
+    takenTodayPaise: todayTotal('borrowed'),
   };
 }
 
@@ -182,17 +193,19 @@ export async function getDashboardData(db, monthKey, now = new Date()) {
   const month = getMonthRange(monthKey);
   const today = getDayRange(now);
 
-  const [monthTotals, todayTotals, receivedTotals, categories, recent, missingPurposeCount] = await Promise.all([
-    getSpendingTotals(db, month.startMs, month.endMs),
-    getSpendingTotals(db, today.startMs, today.endMs),
-    getReceivedTotals(db, month.startMs, month.endMs),
-    getCategoryTotals(db, month.startMs, month.endMs),
-    // Expenses and income only: money given and taken has its own tab.
-    listTransactions(db, { startMs: month.startMs, endMs: month.endMs, kind: 'regular', limit: 5 }),
-    countMissingPurpose(db, month.startMs, month.endMs),
-  ]);
+  const [monthTotals, todayTotals, receivedTotals, todayReceived, categories, recent, missingPurposeCount] =
+    await Promise.all([
+      getSpendingTotals(db, month.startMs, month.endMs),
+      getSpendingTotals(db, today.startMs, today.endMs),
+      getReceivedTotals(db, month.startMs, month.endMs),
+      getReceivedTotals(db, today.startMs, today.endMs),
+      getCategoryTotals(db, month.startMs, month.endMs),
+      // Expenses and income only: money given and taken has its own tab.
+      listTransactions(db, { startMs: month.startMs, endMs: month.endMs, kind: 'regular', limit: 5 }),
+      countMissingPurpose(db, month.startMs, month.endMs),
+    ]);
 
-  return { monthTotals, todayTotals, receivedTotals, categories, recent, missingPurposeCount };
+  return { monthTotals, todayTotals, receivedTotals, todayReceived, categories, recent, missingPurposeCount };
 }
 
 export async function getMonthlyReport(db, monthKey) {

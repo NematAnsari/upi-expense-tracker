@@ -136,6 +136,11 @@ test('loan balances per person, matched by name ignoring case and spaces', async
   assert.equal(byName.ravi.person, 'ravi', 'latest spelling, trimmed');
   assert.equal(balances.owedToYouPaise, 30000);
   assert.equal(balances.youOwePaise, 20000);
+  // Money given and taken today, for the tiles' "Given today" / "Taken today" line.
+  const onOct1 = await getLoanBalances(db, new Date(2026, 9, 1, 18));
+  assert.deepEqual([onOct1.givenTodayPaise, onOct1.takenTodayPaise], [50000, 0]);
+  const onOct3 = await getLoanBalances(db, new Date(2026, 9, 3, 18));
+  assert.deepEqual([onOct3.givenTodayPaise, onOct3.takenTodayPaise], [0, 30000]);
   assert.equal(balances.people.at(-1).status, 'settled', 'settled people are listed last');
 
   // One person's entries, matched the same way (the person screen uses this).

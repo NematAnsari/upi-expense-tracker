@@ -32,6 +32,7 @@ import {
   sortPeople,
 } from '../../domain/loans';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
+import { formatINR } from '../../utils/money';
 
 // Below this many people the whole list fits on a screen, so no search box is shown.
 const SEARCH_FROM = 6;
@@ -50,6 +51,11 @@ const SORT_CHOICES = PEOPLE_SORTS.map((option) => ({ ...option, draw: SORT_ICONS
 /** "1 person", "3 people" */
 function peopleCount(count) {
   return `${count} ${count === 1 ? 'person' : 'people'}`;
+}
+
+/** The tiles' last line: "Given today ₹500.00" or "Nothing today". */
+function todayText(what, paise) {
+  return paise > 0 ? `${what} today ${formatINR(paise)}` : 'Nothing today';
 }
 
 export default function GivenTakenScreen() {
@@ -87,7 +93,6 @@ export default function GivenTakenScreen() {
   }
 
   const inList = (name) => data.people.filter((person) => personLists(person).includes(name));
-  const byStatus = (status) => data.people.filter((person) => person.status === status);
   // Matches any part of the name, ignoring case: "rah" finds Rahul and Sarah.
   const term = search.trim().toLowerCase();
   const people = sortPeople(
@@ -152,7 +157,7 @@ export default function GivenTakenScreen() {
           direction="credit"
           action="Add money I gave"
           zeroText="Nothing to receive"
-          subText={`from ${peopleCount(byStatus('owesYou').length)}`}
+          subText={todayText('Given', data.givenTodayPaise)}
           onPress={() => addLoan('lent')}
         />
         <TotalTile
@@ -161,7 +166,7 @@ export default function GivenTakenScreen() {
           direction="debit"
           action="Add money I took"
           zeroText="Nothing to return"
-          subText={`to ${peopleCount(byStatus('youOwe').length)}`}
+          subText={todayText('Taken', data.takenTodayPaise)}
           onPress={() => addLoan('borrowed')}
         />
       </View>

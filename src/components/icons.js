@@ -39,10 +39,6 @@ export const ICONS = {
       <Path d="M3 20a6 6 0 0 1 12 0M16 5a3 3 0 0 1 0 6M18 14.5a6 6 0 0 1 3 5.5" stroke={c} {...STROKE} />
     </>
   ),
-  // Reports summary lines.
-  compare: (c) => <Path d="M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4" stroke={c} {...STROKE} />,
-  average: (c) => <Path d="M4 20h16M7 16v4M12 10v10M17 13v7" stroke={c} {...STROKE} />,
-  highest: (c) => <Path d="M12 20V5M6 11l6-6 6 6" stroke={c} {...STROKE} />,
   settled: (c) => (
     <>
       <Circle cx={12} cy={12} r={9} stroke={c} {...STROKE} />

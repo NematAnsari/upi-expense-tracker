@@ -70,7 +70,3 @@ export function averagePaise(totalPaise, count) {
 export function percentOf(part, total) {
   return total > 0 ? (part * 100) / total : 0;
 }
-
-export function formatPercent(value) {
-  return `${value.toFixed(1)}%`;
-}
