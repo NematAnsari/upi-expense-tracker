@@ -1,4 +1,4 @@
-// The setup cards on the Auto-Detect Settings screen. They only display state
+// The setup cards on the Payment Detection screen. They only display state
 // and call the handlers they are given; the screen does the checking.
 
 import { StyleSheet, Switch, Text, View } from 'react-native';

@@ -216,6 +216,7 @@ export async function getMonthlyReport(db, monthKey) {
     totalPaise: totals.totalPaise,
     count: totals.count,
     receivedPaise: received.totalPaise,
+    receivedCount: received.count,
     averagePaise: averagePaise(totals.totalPaise, totals.count),
     highest,
     categories,

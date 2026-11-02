@@ -23,7 +23,8 @@ export function AccountRow({ account, onSave }) {
   return (
     <Card style={styles.card}>
       <Text style={styles.bank}>
-        {account.bankName ?? 'Unknown bank'} · account ending {account.last4}
+        {/* Accounts added by hand have no bank or digits. */}
+        {account.last4 ? `${account.bankName ?? 'Unknown bank'} · account ending ${account.last4}` : 'Added by you'}
       </Text>
       <View style={styles.row}>
         <TextField
@@ -32,7 +33,7 @@ export function AccountRow({ account, onSave }) {
           placeholder="e.g. Kotak Salary"
           maxLength={40}
           style={styles.input}
-          accessibilityLabel={`Name for account ending ${account.last4}`}
+          accessibilityLabel={account.last4 ? `Name for account ending ${account.last4}` : 'Account name'}
         />
         <Button label="Save" onPress={save} disabled={!changed} loading={saving} />
       </View>

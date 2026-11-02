@@ -1,4 +1,4 @@
-// Auto-Detect Settings: notification access, battery and payment alerts, plus
+// Payment Detection: notification access, battery and payment alerts, plus
 // every bank message the app captured and what happened to it.
 
 import { useFocusEffect, useRouter } from 'expo-router';

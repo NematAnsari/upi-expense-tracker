@@ -8,10 +8,9 @@ import { TransactionRow } from './TransactionRow';
  * Tapping the button does the action; Delete still asks for confirmation
  * (onDelete should confirm). Tap the row to edit and long-press to delete
  * also keep working, which is what screen readers use.
- * note, variant: passed to TransactionRow (variant="simple" for expenses and income lists).
  * background: the colour behind the row, so the buttons stay hidden until swiped.
  */
-export function SwipeableTransactionRow({ transaction, onEdit, onDelete, note, variant, background = colors.surface }) {
+export function SwipeableTransactionRow({ transaction, onEdit, onDelete, background = colors.surface }) {
   return (
     <SwipeableRow
       background={background}
@@ -20,8 +19,6 @@ export function SwipeableTransactionRow({ transaction, onEdit, onDelete, note, v
     >
       <TransactionRow
         transaction={transaction}
-        note={note}
-        variant={variant}
         onPress={() => onEdit(transaction)}
         onLongPress={() => onDelete(transaction)}
       />

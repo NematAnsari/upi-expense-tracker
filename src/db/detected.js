@@ -296,13 +296,9 @@ export async function undoAddDetected(db, detectedId) {
   });
 }
 
-/** Recent captures of every status, for the Auto-Detect Settings screen. */
+/** Recent captures of every status, for the Payment Detection screen. */
 export async function listRecentDetected(db, limit = 50) {
   return db.getAllAsync(`${SELECT_DETECTED} ORDER BY d.posted_at DESC LIMIT ?`, [limit]);
-}
-
-export async function getDetected(db, id) {
-  return db.getFirstAsync(`${SELECT_DETECTED} WHERE d.id = ?`, [id]);
 }
 
 /**

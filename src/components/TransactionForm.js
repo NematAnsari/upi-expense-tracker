@@ -1,8 +1,9 @@
+import { Stack } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Children, useCallback, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { PAYMENT_METHODS } from '../constants/categories';
 import { amountColor, colors, fontSize, spacing } from '../constants/theme';
+import { createAccount } from '../db/accounts';
 import { createCategory } from '../db/categories';
 import { suggestMerchants, suggestPurposes } from '../db/suggestions';
 import { deleteTemplate, markTemplateUsed, saveTemplate } from '../db/templates';
@@ -19,17 +20,15 @@ import {
 import { validateTemplateForm, validateTransactionForm } from '../domain/validation';
 import { useAsyncValue } from '../hooks/useAsyncValue';
 import { showMessage } from '../ui/notify';
-import { formatDate, formatTime } from '../utils/dates';
 import { Button } from './Button';
 import { Card } from './Card';
 import { CategoryIconRow } from './CategoryIconRow';
 import { Chip } from './Chip';
-import { DateTimeField } from './DateTimeField';
+import { MoreDetailsCard } from './MoreDetailsCard';
 import { SegmentedControl } from './SegmentedControl';
 import { SuggestionChips } from './SuggestionChips';
 import { TemplateBar, templateLabel } from './TemplateBar';
 import { TextLink } from './TextLink';
-import { FormField, TextField } from './TextField';
 
 // Which error message belongs to which form field.
 const ERROR_KEY_FOR_FIELD = { amountText: 'amount', categoryId: 'category' };
@@ -60,6 +59,22 @@ function pairFor(loanType) {
   return loanType === 'lent' || loanType === 'borrowed' ? PAIRS.people : null;
 }
 
+// The screen title follows what is selected, so it always says what you are saving.
+const TITLES = {
+  paid: { add: 'Add Expense', edit: 'Edit Expense' },
+  received: { add: 'Add Income', edit: 'Edit Income' },
+  lent: { add: 'Money Given', edit: 'Edit Money Given' },
+  borrowed: { add: 'Money Taken', edit: 'Edit Money Taken' },
+  lent_repaid: { add: 'Money Received Back', edit: 'Edit Money Received Back' },
+  borrowed_repaid: { add: 'Money Returned', edit: 'Edit Money Returned' },
+};
+
+/** "Add Expense", "Edit Money Given"... mode: 'add' or 'edit'. */
+function titleFor(form, mode) {
+  const key = form.loanType ?? (form.direction === 'credit' ? 'received' : 'paid');
+  return (TITLES[key] ?? TITLES.paid)[mode];
+}
+
 /**
  * A labelled line inside the Details card: label on the left, the first child
  * (the input) on the right, any other children (suggestions) underneath.
@@ -88,15 +103,17 @@ function DetailLine({ label, required, children, error, last }) {
 /**
  * The add/edit form: a big amount, then Paid | Received (or I gave | I took),
  * a row of category icons to scroll and tap (with "+ New"), a Details card
- * (who, what for), More details, and Save fixed at the bottom of the screen.
+ * (who, what for), a More details card (method, account, date and time,
+ * reference, notes), and Save fixed at the bottom of the screen.
  * Money received back and money returned show their type as text instead.
  *
  * onSubmit(values) should save and navigate away. If it throws, the error is
  * shown and everything typed stays in the form.
  * templates: pass an array (even empty) to show templates. Add does; Edit does not.
- * accounts: bank accounts to choose from. The row is hidden when there are none.
+ * accounts: bank accounts to choose from; "+ New" in More details adds one.
  * lockPerson: the name cannot be changed (opened from a person's page).
  * knownPeople: names already used for money given and taken, to ask "Same person as ...?".
+ * mode: 'add' or 'edit', for the screen title ("Add Expense", "Edit Money Given"...).
  */
 export function TransactionForm({
   categories,
@@ -110,15 +127,15 @@ export function TransactionForm({
   amountHint,
   checkBeforeSave,
   knownPeople = [],
+  mode = 'add',
 }) {
   const db = useSQLiteContext();
   const [form, setForm] = useState(initialValues);
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const [categoryList, setCategoryList] = useState(categories);
+  const [accountList, setAccountList] = useState(accounts);
   const [templateList, setTemplateList] = useState(templates ?? []);
-  // Less used fields stay folded away until needed (or already filled in).
-  const [showMoreDetails, setShowMoreDetails] = useState(Boolean(initialValues.reference || initialValues.notes));
   // Decided once, from the entry the form starts with.
   const [pair] = useState(() => pairFor(initialValues.loanType ?? null));
   // A ref updates instantly, unlike state, so a fast double tap cannot save twice.
@@ -172,6 +189,13 @@ export function TransactionForm({
       changes.categoryId = suggestion.categoryId;
     }
     updateFields(changes);
+  }
+
+  // "+ New" in More details: saves the account; the card then selects it.
+  async function handleCreateAccount(name) {
+    const account = await createAccount(db, name);
+    setAccountList((current) => [...current, account]);
+    return account;
   }
 
   async function handleCreateCategory(name) {
@@ -235,10 +259,6 @@ export function TransactionForm({
     const result = validateTransactionForm({ ...form, categoryId: categoryIdForSave(form, categoryList) });
     setErrors(result.errors);
     if (!result.values) {
-      // Open a folded section if the problem is inside it, so the message is visible.
-      if (result.errors.paymentMethod || result.errors.occurredAt) {
-        setShowMoreDetails(true);
-      }
       return;
     }
 
@@ -268,6 +288,7 @@ export function TransactionForm({
 
   return (
     <View style={styles.screen}>
+      <Stack.Screen options={{ title: titleFor(form, mode) }} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {/* Templates are saved expenses, so they only fit "Paid". */}
         {templatesEnabled && activity?.key === 'paid' ? (
@@ -375,82 +396,14 @@ export function TransactionForm({
           </DetailLine>
         </Card>
 
-        {/* Money given and taken shows the date up front; other entries keep it in More details. */}
-        {loan ? (
-          <FormField label="Date" error={errors.occurredAt}>
-            <DateTimeField value={form.occurredAt} onChange={(value) => update('occurredAt', value)} />
-          </FormField>
-        ) : null}
-
-        {showMoreDetails ? (
-          <>
-            <FormField label="Payment method" required error={errors.paymentMethod}>
-              <View style={styles.chips}>
-                {PAYMENT_METHODS.map((method) => (
-                  <Chip
-                    key={method}
-                    label={method}
-                    selected={form.paymentMethod === method}
-                    onPress={() => update('paymentMethod', method)}
-                  />
-                ))}
-              </View>
-            </FormField>
-
-            {accounts.length > 0 ? (
-              <FormField label="Bank account">
-                <View style={styles.chips}>
-                  <Chip label="None" selected={form.accountId == null} onPress={() => update('accountId', null)} />
-                  {accounts.map((account) => (
-                    <Chip
-                      key={account.id}
-                      label={account.nickname}
-                      selected={form.accountId === account.id}
-                      onPress={() => update('accountId', account.id)}
-                    />
-                  ))}
-                </View>
-              </FormField>
-            ) : null}
-
-            {loan ? null : (
-              <FormField label="Date and time" error={errors.occurredAt}>
-                <DateTimeField value={form.occurredAt} onChange={(value) => update('occurredAt', value)} />
-              </FormField>
-            )}
-
-            <FormField label="UPI reference number">
-              <TextField
-                value={form.reference}
-                onChangeText={(text) => update('reference', text)}
-                placeholder="From your bank SMS or UPI app (optional)"
-                autoCapitalize="none"
-                maxLength={60}
-              />
-            </FormField>
-
-            <FormField label="Notes">
-              <TextField
-                value={form.notes}
-                onChangeText={(text) => update('notes', text)}
-                placeholder="Anything else to remember (optional)"
-                multiline
-                maxLength={500}
-                style={styles.notes}
-              />
-            </FormField>
-          </>
-        ) : (
-          <TextLink
-            label={
-              loan
-                ? `More details: ${form.paymentMethod}`
-                : `More details: ${form.paymentMethod} · ${formatDate(form.occurredAt)}, ${formatTime(form.occurredAt)}`
-            }
-            onPress={() => setShowMoreDetails(true)}
-            muted
-          />
-        )}
+        {/* Always open: payment method, bank account, date and time, UPI reference, notes. */}
+        <MoreDetailsCard
+          values={form}
+          onChange={update}
+          accounts={accountList}
+          onCreateAccount={handleCreateAccount}
+          errors={errors}
+        />
 
         {templatesEnabled && activity?.key === 'paid' ? (
           <TextLink label="Save as template" onPress={handleSaveTemplate} disabled={saving} />
@@ -489,7 +442,6 @@ const styles = StyleSheet.create({
   locked: { color: colors.textMuted },
   similar: { gap: spacing.sm },
   similarText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.people },
-  notes: { minHeight: 88, paddingTop: spacing.md, textAlignVertical: 'top' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   saveBar: {
     position: 'absolute',

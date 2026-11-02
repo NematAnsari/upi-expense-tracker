@@ -4,6 +4,7 @@ import { colors, fontSize, radius, spacing } from '../constants/theme';
 import { MAX_CATEGORY_NAME_LENGTH } from '../domain/validation';
 import { Button } from './Button';
 import { CategoryIcon } from './CategoryIcon';
+import { ICONS, OutlineIcon } from './icons';
 import { TextField } from './TextField';
 
 /** One category to tap: its icon and short name; teal when selected. */
@@ -70,17 +71,13 @@ export function CategoryIconRow({ categories, selectedId, onSelect, onCreate }) 
           const selected = category.id === selectedId;
           return (
             <Cell key={category.id} label={category.name} selected={selected} onPress={() => onSelect(category.id)}>
-              <CategoryIcon
-                categoryName={category.name}
-                showBadge={false}
-                color={selected ? colors.primary : colors.textMuted}
-              />
+              <CategoryIcon categoryName={category.name} small color={selected ? colors.primary : colors.textMuted} />
             </Cell>
           );
         })}
         <Cell label="New" selected={creating} onPress={() => setCreating(true)}>
           <View style={styles.newCircle}>
-            <Text style={styles.newPlus}>+</Text>
+            <OutlineIcon draw={ICONS.plus} color={colors.primary} />
           </View>
         </Cell>
       </ScrollView>
@@ -118,13 +115,26 @@ export function CategoryIconRow({ categories, selectedId, onSelect, onCreate }) 
 const styles = StyleSheet.create({
   container: { gap: spacing.sm },
   row: { gap: spacing.xs },
-  cell: { width: 76, alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.xs, borderRadius: radius.md },
+  // Same as the payment method and bank account cells in More details:
+  // grows with its label between the min and max width.
+  cell: {
+    minWidth: 60,
+    maxWidth: 96,
+    alignItems: 'center',
+    gap: 2,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.xs,
+    borderRadius: radius.md,
+  },
   cellSelected: { backgroundColor: colors.primarySoft },
   cellText: { fontSize: fontSize.xs, color: colors.textMuted, textAlign: 'center', paddingHorizontal: 2 },
   cellTextSelected: { color: colors.primary, fontWeight: '700' },
   newCircle: {
-    width: 38,
-    height: 38,
+    minWidth: 28,
+    minHeight: 28,
+    maxWidth: 36,
+    maxHeight: 36,
+    padding: spacing.xs,
     borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
@@ -132,7 +142,6 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     borderColor: colors.primary,
   },
-  newPlus: { fontSize: fontSize.xl, color: colors.primary, lineHeight: 24 },
   newRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
   newInput: { flex: 1 },
   error: { fontSize: fontSize.sm, color: colors.danger },

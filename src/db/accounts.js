@@ -1,5 +1,6 @@
 // Bank accounts, identified only by bank name and the last 4 digits shown in
-// bank messages. Full account numbers are never stored.
+// bank messages, or added by hand with just a name. Full account numbers are
+// never stored.
 
 export async function listAccounts(db) {
   return db.getAllAsync(
@@ -26,6 +27,29 @@ export async function findOrCreateAccount(db, { bankName, bankShort, last4 }) {
     [bankName ?? null, last4, nickname, Date.now()],
   );
   return result.lastInsertRowId;
+}
+
+/**
+ * Adds an account by hand (for a bank that sends no SMS, or a wallet).
+ * Only a name is stored: no bank name or digits. Names must not be empty or
+ * already used (ignoring case). Returns the new account.
+ */
+export async function createAccount(db, rawNickname) {
+  const nickname = String(rawNickname ?? '')
+    .trim()
+    .slice(0, 40);
+  if (nickname === '') {
+    throw new Error('Enter a name for this account.');
+  }
+  const taken = await db.getFirstAsync('SELECT id FROM accounts WHERE lower(nickname) = lower(?)', [nickname]);
+  if (taken) {
+    throw new Error('You already have an account with this name.');
+  }
+  const result = await db.runAsync(
+    'INSERT INTO accounts (bank_name, last4, nickname, created_at) VALUES (NULL, NULL, ?, ?)',
+    [nickname, Date.now()],
+  );
+  return { id: result.lastInsertRowId, bankName: null, last4: null, nickname };
 }
 
 export async function renameAccount(db, id, rawNickname) {

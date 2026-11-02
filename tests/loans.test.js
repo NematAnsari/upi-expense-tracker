@@ -79,6 +79,7 @@ test('loans are not counted as spending or income', async () => {
   assert.equal(report.totalPaise, 30000);
   assert.equal(report.count, 1);
   assert.equal(report.receivedPaise, 100000);
+  assert.equal(report.receivedCount, 1);
   assert.deepEqual(
     report.categories.map((c) => c.categoryName),
     ['Food & Dining'],

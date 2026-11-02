@@ -4,8 +4,6 @@
 import * as listener from '../../modules/upi-notification-listener';
 import { syncCapturedNotifications } from '../db/detected';
 
-export const detectionAvailable = listener.isAvailable;
-
 /**
  * Makes sure the notification reader is connected, then moves newly captured
  * notifications into the database. Never throws: detection is optional, so a

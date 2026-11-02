@@ -28,6 +28,7 @@ export const SELECT_TRANSACTION = `
  * search: matches purpose or merchant, case-insensitive. sort: 'desc' | 'asc'.
  * missingPurpose: only expenses with no purpose yet, so they can be filled in.
  * accountId: one bank account. direction: 'debit' (paid) or 'credit' (received).
+ * paymentMethod: one method ('UPI', 'Cash', 'Card' or 'Other').
  * loansOnly: only money lent, borrowed or paid back.
  * person: only this name, ignoring case and spaces at the ends (as getLoanBalances matches people).
  * kind: 'regular' (expenses and income), 'paid' (expenses), 'received' (income),
@@ -42,6 +43,7 @@ export async function listTransactions(db, filters = {}) {
     search,
     missingPurpose,
     accountId,
+    paymentMethod,
     direction,
     loansOnly,
     person,
@@ -73,6 +75,10 @@ export async function listTransactions(db, filters = {}) {
   if (accountId != null) {
     where.push('t.account_id = ?');
     params.push(accountId);
+  }
+  if (paymentMethod != null) {
+    where.push('t.payment_method = ?');
+    params.push(paymentMethod);
   }
   if (direction != null) {
     where.push('t.direction = ?');

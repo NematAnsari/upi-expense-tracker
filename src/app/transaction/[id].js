@@ -98,6 +98,7 @@ export default function EditTransactionScreen() {
       submitLabel="Save changes"
       onSubmit={handleSubmit}
       onDelete={handleDelete}
+      mode="edit"
       checkBeforeSave={checkBeforeSave}
     />
   );

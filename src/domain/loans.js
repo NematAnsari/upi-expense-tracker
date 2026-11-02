@@ -81,6 +81,51 @@ export function repaymentFor(status) {
 }
 
 /**
+ * The person page's totals and Summary, from their balance (getLoanBalances)
+ * and entries [{ loanType, amountPaise, occurredAt }]:
+ *   pair:       always two totals side by side, "Total given | Received back"
+ *               (money you gave) or "Total taken | Returned" (money you took);
+ *               a side with nothing yet is 0.
+ *   share:      how much of the total has come back, 0 to 1.
+ *   back/total: the two amounts behind share.
+ *   firstAt:    the first entry's time. lastBackAt: the last money back, or null.
+ *   count:      how many entries.
+ * The side is the open amount's side; for a settled person, the bigger one.
+ */
+export function personSummary(balance, entries) {
+  const gave =
+    balance.status === 'owesYou' || (balance.status !== 'youOwe' && balance.givenPaise >= balance.takenPaise);
+  const pair = gave
+    ? [
+        { label: 'Total given', paise: balance.givenPaise, direction: 'debit' },
+        { label: 'Received back', paise: balance.receivedBackPaise, direction: 'credit' },
+      ]
+    : [
+        { label: 'Total taken', paise: balance.takenPaise, direction: 'credit' },
+        { label: 'Returned', paise: balance.returnedPaise, direction: 'debit' },
+      ];
+  const total = pair[0].paise;
+  const back = pair[1].paise;
+  const backType = gave ? 'lent_repaid' : 'borrowed_repaid';
+  const times = entries.map((entry) => entry.occurredAt);
+  const backTimes = entries.filter((entry) => entry.loanType === backType).map((entry) => entry.occurredAt);
+  return {
+    pair,
+    share: total > 0 ? Math.min(back / total, 1) : 0,
+    back,
+    total,
+    firstAt: times.length > 0 ? Math.min(...times) : null,
+    lastBackAt: backTimes.length > 0 ? Math.max(...backTimes) : null,
+    count: entries.length,
+  };
+}
+
+/** What was left after an entry, short enough for one line: "₹50,000.00 left", or "Settled". */
+export function shortLeft(netPaise) {
+  return netPaise === 0 ? 'Settled' : `${formatINR(Math.abs(netPaise))} left`;
+}
+
+/**
  * The totals behind a person's remaining amount, as labeled lines. Only
  * non-zero parts are listed, so a person you only gave money to shows
  * "Total given" and "Received back". Direction sets the amount colour.
@@ -226,11 +271,6 @@ export function timelineText(person, now = Date.now()) {
   return null;
 }
 
-/** When the current open amount started, or null when settled (see settlementDates). */
-export function openSince(entries) {
-  return settlementDates(entries).openSinceAt;
-}
-
 /** The person's net amount after each entry, as { [entry id]: netPaise }. */
 export function runningRemaining(entries) {
   const after = {};
@@ -253,25 +293,37 @@ export function describeNet(netPaise) {
   return 'Fully settled';
 }
 
-export const PEOPLE_SORTS = [
+// The Given & Taken Filters sheet: which people to show, and in what order.
+export const PEOPLE_SHOW = [
   { value: 'all', label: 'All' },
-  { value: 'latest', label: 'Latest' },
-  { value: 'largest', label: 'Largest Amount' },
-  { value: 'oldest', label: 'Oldest Pending' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'settled', label: 'Settled' },
 ];
+
+export const PEOPLE_SORTS = [
+  { value: 'latest', label: 'Latest' },
+  { value: 'largest', label: 'Largest' },
+  { value: 'oldest', label: 'Oldest pending' },
+];
+
+/** Keeps everyone (all), people with money still left (pending), or fully settled people. */
+export function showPeople(people, show = 'all') {
+  if (show === 'all') {
+    return people;
+  }
+  return people.filter((person) => (person.status === 'settled') === (show === 'settled'));
+}
 
 /**
  * Orders the people list. Fully settled people always come last.
- * all (the default) and latest: most recent activity first.
+ * latest (the default): most recent activity first.
  * largest: biggest remaining amount first.
  * oldest: the open amount that started longest ago first.
  */
-export function sortPeople(people, mode = 'all') {
+export function sortPeople(people, mode = 'latest') {
   const settledLast = (a, b) => (a.status === 'settled') - (b.status === 'settled');
-  const latest = (a, b) => b.lastAt - a.lastAt;
   const compare = {
-    all: latest,
-    latest,
+    latest: (a, b) => b.lastAt - a.lastAt,
     largest: (a, b) => b.amountPaise - a.amountPaise || b.lastAt - a.lastAt,
     oldest: (a, b) => (a.openSinceAt ?? Infinity) - (b.openSinceAt ?? Infinity) || b.lastAt - a.lastAt,
   }[mode];

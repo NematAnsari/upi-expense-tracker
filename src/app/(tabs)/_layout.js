@@ -55,7 +55,6 @@ export default function TabLayout() {
         name="given-taken"
         options={{
           title: 'Given & Taken',
-          headerTitle: 'Money Given and Taken',
           headerRight: GivenTakenInfo,
           tabBarIcon: iconFor('givenTaken'),
         }}

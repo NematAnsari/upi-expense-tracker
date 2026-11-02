@@ -6,10 +6,12 @@ import { createTransaction, listTransactions, renamePerson } from '../src/db/tra
 import {
   describeNet,
   findSimilarPeople,
-  openSince,
+  personSummary,
   reminderMessage,
   runningRemaining,
   settlementDates,
+  shortLeft,
+  showPeople,
   sortPeople,
   suggestLoanType,
   timelineText,
@@ -40,22 +42,22 @@ async function setup() {
   return { db, add };
 }
 
-test('openSince and running remaining follow the entries in time order', () => {
+test('open date and running remaining follow the entries in time order', () => {
   const entries = [
     { id: 3, loanType: 'lent_repaid', amountPaise: 2000, occurredAt: day(9, 1) },
     { id: 1, loanType: 'lent', amountPaise: 5000, occurredAt: day(8, 1) },
     { id: 2, loanType: 'lent_repaid', amountPaise: 5000, occurredAt: day(8, 20) }, // settled here
     { id: 4, loanType: 'lent', amountPaise: 6000, occurredAt: day(8, 25) }, // opens again
   ];
-  assert.equal(openSince(entries), day(8, 25), 'the latest time it moved away from zero');
+  assert.equal(settlementDates(entries).openSinceAt, day(8, 25), 'the latest time it moved away from zero');
   assert.deepEqual(runningRemaining(entries), { 1: 5000, 2: 0, 4: 6000, 3: 4000 });
-  assert.equal(openSince(entries.slice(1, 3)), null, 'settled: no pending date');
+  assert.equal(settlementDates(entries.slice(1, 3)).openSinceAt, null, 'settled: no pending date');
   // Overpaid in the past flips the side: the open amount starts at that entry.
   const flipped = [
     { id: 1, loanType: 'lent', amountPaise: 1000, occurredAt: day(1, 1) },
     { id: 2, loanType: 'lent_repaid', amountPaise: 1500, occurredAt: day(2, 1) },
   ];
-  assert.equal(openSince(flipped), day(2, 1));
+  assert.equal(settlementDates(flipped).openSinceAt, day(2, 1));
 
   // Settled after reopening: the dates belong to the last settled stretch.
   const settledTwice = [
@@ -119,6 +121,60 @@ test('date line: the icon says pending or settled, the text is date and total ti
   assert.equal(timelineText({}, now), null);
 });
 
+test('person summary: paired totals, share back, first and last-back dates', () => {
+  const entries = [
+    { loanType: 'lent', amountPaise: 5000000, occurredAt: day(8, 12) },
+    { loanType: 'lent', amountPaise: 900000, occurredAt: day(8, 20) },
+    { loanType: 'lent_repaid', amountPaise: 200000, occurredAt: day(9, 1) },
+  ];
+  const owesYou = {
+    status: 'owesYou',
+    givenPaise: 5900000,
+    receivedBackPaise: 200000,
+    takenPaise: 0,
+    returnedPaise: 0,
+  };
+  const summary = personSummary(owesYou, entries);
+  assert.deepEqual(
+    summary.pair.map((part) => [part.label, part.paise]),
+    [
+      ['Total given', 5900000],
+      ['Received back', 200000],
+    ],
+  );
+  assert.equal(Math.round(summary.share * 100), 3);
+  assert.equal(summary.firstAt, day(8, 12));
+  assert.equal(summary.lastBackAt, day(9, 1));
+  assert.equal(summary.count, 3);
+
+  // Nothing back yet: the pair still has both sides, the second is 0.
+  const nothingBack = personSummary({ ...owesYou, receivedBackPaise: 0 }, entries.slice(0, 2));
+  assert.deepEqual(
+    nothingBack.pair.map((part) => part.paise),
+    [5900000, 0],
+  );
+  assert.equal(nothingBack.share, 0);
+  assert.equal(nothingBack.lastBackAt, null);
+
+  // Money you took: "Total taken | Returned".
+  const took = personSummary(
+    { status: 'youOwe', givenPaise: 0, receivedBackPaise: 0, takenPaise: 100000, returnedPaise: 25000 },
+    [
+      { loanType: 'borrowed', amountPaise: 100000, occurredAt: day(9, 5) },
+      { loanType: 'borrowed_repaid', amountPaise: 25000, occurredAt: day(9, 9) },
+    ],
+  );
+  assert.deepEqual(
+    took.pair.map((part) => part.label),
+    ['Total taken', 'Returned'],
+  );
+  assert.equal(took.share, 0.25);
+
+  assert.equal(shortLeft(5000000), '₹50,000.00 left');
+  assert.equal(shortLeft(-600000), '₹6,000.00 left');
+  assert.equal(shortLeft(0), 'Settled');
+});
+
 test('people can be sorted; fully settled always last', () => {
   const people = [
     { person: 'A', status: 'owesYou', amountPaise: 100, lastAt: 30, openSinceAt: 20 },
@@ -127,15 +183,27 @@ test('people can be sorted; fully settled always last', () => {
     { person: 'D', status: 'owesYou', amountPaise: 500, lastAt: 20, openSinceAt: 15 },
   ];
   const names = (mode) => sortPeople(people, mode).map((p) => p.person);
-  assert.deepEqual(names('all'), ['A', 'D', 'C', 'B']);
   assert.deepEqual(names('latest'), ['A', 'D', 'C', 'B']);
   assert.deepEqual(
     sortPeople(people).map((p) => p.person),
-    names('all'),
-    'All is the default',
+    names('latest'),
+    'Latest is the default',
   );
   assert.deepEqual(names('largest'), ['C', 'D', 'A', 'B']);
   assert.deepEqual(names('oldest'), ['C', 'D', 'A', 'B']);
+});
+
+test('people can be shown all, pending only or settled only', () => {
+  const people = [
+    { person: 'A', status: 'owesYou' },
+    { person: 'B', status: 'settled' },
+    { person: 'C', status: 'youOwe' },
+  ];
+  const names = (show) => showPeople(people, show).map((p) => p.person);
+  assert.deepEqual(names('all'), ['A', 'B', 'C']);
+  assert.deepEqual(showPeople(people).length, 3, 'All is the default');
+  assert.deepEqual(names('pending'), ['A', 'C']);
+  assert.deepEqual(names('settled'), ['B']);
 });
 
 test('similar names are offered, exact matches and unrelated names are not', () => {

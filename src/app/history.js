@@ -1,5 +1,7 @@
 // History: every expense and income entry, with search and filters. Swipe a
 // row right (or tap it) to edit, swipe left (or long-press) to delete.
+// Filters opens a sheet: sort order (newest / oldest), missing purpose, all
+// months, then category, payment method and bank account as icons.
 // Amounts: red paid, green received.
 // Money given and taken is not listed here; each person's page has its history.
 
@@ -10,10 +12,12 @@ import { FlatList, StyleSheet, Text, View } from 'react-native';
 import { Amount } from '../components/Amount';
 import { Chip } from '../components/Chip';
 import { ChipRow } from '../components/ChipRow';
+import { ChoiceRow, countFilters, FilterButton, FilterSheet, PaymentFilters } from '../components/FilterSheet';
+import { ICONS } from '../components/icons';
 import { MonthSelector } from '../components/MonthSelector';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
-import { TextField } from '../components/TextField';
 import { SwipeableTransactionRow } from '../components/SwipeableTransactionRow';
+import { TextField } from '../components/TextField';
 import { colors, fontSize, spacing } from '../constants/theme';
 import { listAccounts } from '../db/accounts';
 import { listCategories } from '../db/categories';
@@ -28,6 +32,14 @@ const KIND_FILTERS = [
   { value: 'regular', label: 'All' },
   { value: 'paid', label: 'Paid' },
   { value: 'received', label: 'Received' },
+];
+
+const NO_FILTERS = { categoryId: null, paymentMethod: null, accountId: null };
+
+// listTransactions `sort`: by date, newest or oldest first.
+const SORTS = [
+  { value: 'desc', label: 'Newest', draw: ICONS.latest },
+  { value: 'asc', label: 'Oldest', draw: ICONS.oldest },
 ];
 
 /** Total of one direction. */
@@ -46,21 +58,20 @@ export default function HistoryScreen() {
   const [allMonths, setAllMonths] = useState(false);
   const [kind, setKind] = useState('regular');
   const [missingPurpose, setMissingPurpose] = useState(false);
-  const [categoryId, setCategoryId] = useState(null);
-  const [accountId, setAccountId] = useState(null);
+  const [filters, setFilters] = useState(NO_FILTERS);
   const [sort, setSort] = useState('desc');
-  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Links from other screens open this page with filter params, such as the
-  // Expenses tab's "expenses need a purpose" (missing-purpose).
+  // Expenses tab's "expenses need a purpose" (missing-purpose) or a category
+  // tapped on the Reports tab (category, with categoryId).
   // Adjusting state while rendering (instead of in an effect) is React's
   // recommended way to react to changed inputs, and avoids a flash of the old list.
   const [appliedLinkAt, setAppliedLinkAt] = useState(null);
   if (params.filter && params.at !== appliedLinkAt) {
     setAppliedLinkAt(params.at);
-    setKind('regular');
-    setCategoryId(null);
-    setAccountId(null);
+    setKind(params.filter === 'category' ? 'paid' : 'regular');
+    setFilters(params.filter === 'category' ? { ...NO_FILTERS, categoryId: Number(params.categoryId) } : NO_FILTERS);
     setMissingPurpose(params.filter === 'missing-purpose');
     setSearch(params.search ?? '');
     if (params.month) {
@@ -72,36 +83,43 @@ export default function HistoryScreen() {
   const loader = useCallback(async () => {
     const range = allMonths ? {} : getMonthRange(monthKey);
     const [transactions, categories, accounts] = await Promise.all([
-      listTransactions(db, { ...range, kind, categoryId, search, missingPurpose, accountId, sort }),
+      listTransactions(db, { ...range, kind, search, missingPurpose, sort, ...filters }),
       listCategories(db),
       listAccounts(db),
     ]);
-    return { transactions, categories, accounts };
-  }, [db, monthKey, allMonths, kind, categoryId, search, missingPurpose, accountId, sort]);
+    return { transactions, categories: pickableCategories(categories), accounts };
+  }, [db, monthKey, allMonths, kind, search, missingPurpose, sort, filters]);
   const { data, error, reload } = useFocusQuery(loader);
 
   const transactions = data?.transactions ?? [];
   const spentPaise = sumPaise(transactions, 'debit');
   const receivedPaise = sumPaise(transactions, 'credit');
-  const moreFilterCount = (categoryId != null ? 1 : 0) + (accountId != null ? 1 : 0);
-  // How many options inside the Filters panel are on (shown on the Filters chip).
-  const panelFilterCount = [missingPurpose, allMonths, sort === 'asc', categoryId != null, accountId != null].filter(
-    Boolean,
-  ).length;
-  const hasFilters = Boolean(search.trim()) || kind !== 'regular' || missingPurpose || moreFilterCount > 0;
+  const sheetFilterCount = countFilters(filters);
+  // Everything set inside the sheet (shown on the Filters button).
+  const panelFilterCount = [missingPurpose, allMonths, sort === 'asc'].filter(Boolean).length + sheetFilterCount;
+  const hasFilters = Boolean(search.trim()) || kind !== 'regular' || missingPurpose || sheetFilterCount > 0;
 
   const handleDelete = useDeleteTransaction(reload);
+  // Tapping the selected choice again clears that filter.
+  const toggleFilter = (key, value) =>
+    setFilters((current) => ({ ...current, [key]: current[key] === value ? null : value }));
 
   function clearFilters() {
     setSearch('');
     setKind('regular');
     setMissingPurpose(false);
-    setCategoryId(null);
-    setAccountId(null);
+    setFilters(NO_FILTERS);
+  }
+
+  function clearSheet() {
+    setMissingPurpose(false);
+    setAllMonths(false);
+    setSort('desc');
+    setFilters(NO_FILTERS);
   }
 
   function renderEmpty() {
-    if (missingPurpose && !search.trim() && moreFilterCount === 0) {
+    if (missingPurpose && !search.trim() && sheetFilterCount === 0) {
       return (
         <EmptyState
           title="All caught up"
@@ -145,66 +163,47 @@ export default function HistoryScreen() {
 
         {allMonths ? null : <MonthSelector monthKey={monthKey} onChange={setMonthKey} />}
 
-        <ChipRow>
-          {KIND_FILTERS.map((option) => (
-            <Chip
-              key={option.label}
-              label={option.label}
-              selected={kind === option.value}
-              onPress={() => setKind(option.value)}
-            />
-          ))}
-          <Chip
-            label={panelFilterCount > 0 ? `Filters (${panelFilterCount})` : 'Filters'}
-            selected={showMoreFilters || panelFilterCount > 0}
-            onPress={() => setShowMoreFilters(!showMoreFilters)}
-          />
-        </ChipRow>
-
-        {showMoreFilters ? (
-          <>
+        <View style={styles.chipsLine}>
+          <View style={styles.flex}>
             <ChipRow>
-              <Chip
-                label="Missing purpose"
-                selected={missingPurpose}
-                onPress={() => setMissingPurpose(!missingPurpose)}
-              />
-              <Chip label="All months" selected={allMonths} onPress={() => setAllMonths(!allMonths)} />
-              <Chip
-                label={sort === 'desc' ? 'Newest first' : 'Oldest first'}
-                selected={sort === 'asc'}
-                onPress={() => setSort(sort === 'desc' ? 'asc' : 'desc')}
-              />
-            </ChipRow>
-
-            <ChipRow>
-              <Chip label="All categories" selected={categoryId == null} onPress={() => setCategoryId(null)} />
-              {pickableCategories(data?.categories ?? []).map((category) => (
+              {KIND_FILTERS.map((option) => (
                 <Chip
-                  key={category.id}
-                  label={category.name}
-                  selected={categoryId === category.id}
-                  onPress={() => setCategoryId(category.id)}
+                  key={option.label}
+                  label={option.label}
+                  selected={kind === option.value}
+                  onPress={() => setKind(option.value)}
                 />
               ))}
             </ChipRow>
-
-            {data?.accounts?.length > 0 ? (
-              <ChipRow>
-                <Chip label="All accounts" selected={accountId == null} onPress={() => setAccountId(null)} />
-                {data.accounts.map((account) => (
-                  <Chip
-                    key={account.id}
-                    label={account.nickname}
-                    selected={accountId === account.id}
-                    onPress={() => setAccountId(account.id)}
-                  />
-                ))}
-              </ChipRow>
-            ) : null}
-          </>
-        ) : null}
+          </View>
+          <FilterButton count={panelFilterCount} onPress={() => setFiltersOpen(true)} />
+        </View>
       </View>
+
+      {data ? (
+        <FilterSheet
+          visible={filtersOpen}
+          onClose={() => setFiltersOpen(false)}
+          onClear={clearSheet}
+          showLabel={`Show ${transactions.length} ${transactions.length === 1 ? 'entry' : 'entries'}`}
+        >
+          <ChoiceRow label="Sort by" choices={SORTS} value={sort} onSelect={setSort} />
+          <ChipRow>
+            <Chip
+              label="Missing purpose"
+              selected={missingPurpose}
+              onPress={() => setMissingPurpose(!missingPurpose)}
+            />
+            <Chip label="All months" selected={allMonths} onPress={() => setAllMonths(!allMonths)} />
+          </ChipRow>
+          <PaymentFilters
+            filters={filters}
+            onToggle={toggleFilter}
+            categories={data.categories}
+            accounts={data.accounts}
+          />
+        </FilterSheet>
+      ) : null}
 
       {error ? <ErrorState onRetry={reload} /> : null}
       {!data && !error ? <LoadingState /> : null}
@@ -229,7 +228,6 @@ export default function HistoryScreen() {
           renderItem={({ item }) => (
             <SwipeableTransactionRow
               transaction={item}
-              variant="simple"
               background={colors.background}
               onEdit={() => router.push({ pathname: '/transaction/[id]', params: { id: item.id } })}
               onDelete={handleDelete}
@@ -244,11 +242,13 @@ export default function HistoryScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
+  flex: { flex: 1 },
   filters: {
     padding: spacing.lg,
     paddingBottom: spacing.sm,
     gap: spacing.sm,
   },
+  chipsLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
   summary: { fontSize: fontSize.sm, color: colors.textMuted, paddingVertical: spacing.sm },
   separator: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },

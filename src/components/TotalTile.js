@@ -24,22 +24,16 @@ function CornerPlus({ color, soft }) {
  *   ₹57,000.00                   ₹12,400.00
  *   from 3 people                18 expenses
  * At ₹0 it shows zeroText ("Nothing to receive") instead. The whole tile is the button.
- * Used side by side on the Expenses and Given & Taken tabs; fixed-height slots
- * keep two tiles lined up row by row.
+ * Without onPress it is a plain tile (no +), as on the Reports tab.
+ * Used side by side; fixed-height slots keep two tiles lined up row by row.
  * direction: 'credit' (green) or 'debit' (red). action: what tapping does, for screen readers.
  */
 export function TotalTile({ label, paise, direction, action, zeroText, subText, onPress }) {
   const color = direction === 'credit' ? colors.income : colors.expense;
   const soft = direction === 'credit' ? colors.incomeSoft : colors.expenseSoft;
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${label}, ${action}`}
-      onPress={onPress}
-      style={({ pressed }) => [styles.tile, pressed && styles.pressed]}
-    >
-      <CornerPlus color={color} soft={soft} />
-      <View style={styles.header}>
+  const content = (
+    <>
+      <View style={[styles.header, onPress && styles.headerWithPlus]}>
         <Text style={styles.label} numberOfLines={2}>
           {label}
         </Text>
@@ -56,6 +50,20 @@ export function TotalTile({ label, paise, direction, action, zeroText, subText, 
       <Text style={styles.subText} numberOfLines={1}>
         {paise > 0 ? subText : ' '}
       </Text>
+    </>
+  );
+  if (!onPress) {
+    return <View style={styles.tile}>{content}</View>;
+  }
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label}, ${action}`}
+      onPress={onPress}
+      style={({ pressed }) => [styles.tile, pressed && styles.pressed]}
+    >
+      <CornerPlus color={color} soft={soft} />
+      {content}
     </Pressable>
   );
 }
@@ -73,8 +81,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   pressed: { opacity: 0.7 },
-  // Room for a two-line title; the right padding keeps it clear of the corner +.
-  header: { minHeight: 36, paddingRight: 32 },
+  // Room for a two-line title.
+  header: { minHeight: 36 },
+  // Keeps the title clear of the corner +.
+  headerWithPlus: { paddingRight: 32 },
   label: { fontSize: fontSize.sm, lineHeight: 18, color: colors.textMuted },
   amountSlot: { height: 30, justifyContent: 'center' },
   zero: { fontSize: fontSize.md, fontWeight: '600', color: colors.textMuted },

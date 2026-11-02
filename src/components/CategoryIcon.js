@@ -1,6 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
-import { colors, radius } from '../constants/theme';
+import { colors, radius, spacing } from '../constants/theme';
 
 // Thin outline icons for categories, on a 24 x 24 grid, in the same style as the tab icons.
 const STROKE = { fill: 'none', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' };
@@ -73,17 +73,19 @@ const GENERAL = (c) => (
 /**
  * A category icon in a pale circle, with a small badge for paid (red ↗) or
  * received (green ↙) in the bottom-right corner. showBadge={false} leaves the
- * badge out (for picking a category). color: the icon colour (grey by default).
+ * badge out. small: the 28 px size used for choices (category row, Filters),
+ * matching the payment method and bank account cells; it never has a badge.
+ * color: the icon colour (grey by default).
  */
-export function CategoryIcon({ categoryName, direction, showBadge = true, color = colors.textMuted }) {
+export function CategoryIcon({ categoryName, direction, showBadge = true, small = false, color = colors.textMuted }) {
   const draw = ICONS[categoryName] ?? GENERAL;
   const received = direction === 'credit';
   return (
-    <View style={styles.circle}>
-      <Svg width={20} height={20} viewBox="0 0 24 24" accessible={false}>
+    <View style={[styles.circle, small && styles.circleSmall]}>
+      <Svg width={small ? 15 : 20} height={small ? 15 : 20} viewBox="0 0 24 24" accessible={false}>
         {draw(color)}
       </Svg>
-      {showBadge ? (
+      {showBadge && !small ? (
         <View style={[styles.badge, { backgroundColor: received ? colors.income : colors.expense }]}>
           <Svg width={10} height={10} viewBox="0 0 24 24" accessible={false}>
             <Path
@@ -111,6 +113,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
+  },
+  circleSmall: {
+    width: undefined,
+    height: undefined,
+    minWidth: 28,
+    minHeight: 28,
+    maxWidth: 36,
+    maxHeight: 36,
+    padding: spacing.xs,
   },
   badge: {
     position: 'absolute',

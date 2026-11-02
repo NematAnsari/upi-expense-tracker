@@ -35,7 +35,7 @@ export default function MoreScreen() {
         <ListRow title="Review payments" subtitle={reviewSubtitle} onPress={() => router.push('/review-payments')} />
         <Divider />
         <ListRow
-          title="Auto-detect settings"
+          title="Payment detection"
           subtitle="Notification access, battery, alerts"
           onPress={() => router.push('/auto-detect')}
         />

@@ -28,13 +28,14 @@ export default function RootLayout() {
               }}
             >
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="transaction/new" options={{ title: 'Add Transaction' }} />
-              <Stack.Screen name="transaction/[id]" options={{ title: 'Edit Transaction' }} />
+              {/* The form sets its own title from what is selected ("Add Expense", "Edit Money Given"...). */}
+              <Stack.Screen name="transaction/new" options={{ title: 'Add Expense' }} />
+              <Stack.Screen name="transaction/[id]" options={{ title: 'Edit Expense' }} />
               <Stack.Screen name="review-payments" options={{ title: 'Review Payments' }} />
-              <Stack.Screen name="auto-detect" options={{ title: 'Auto-Detect Settings' }} />
+              <Stack.Screen name="auto-detect" options={{ title: 'Payment Detection' }} />
               <Stack.Screen name="accounts" options={{ title: 'Bank Accounts' }} />
               <Stack.Screen name="history" options={{ title: 'History' }} />
-              <Stack.Screen name="loan/[person]" options={{ title: 'Person' }} />
+              <Stack.Screen name="loan/[person]" options={{ title: 'Details' }} />
             </Stack>
           </SQLiteProvider>
         </Suspense>

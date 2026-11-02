@@ -4,6 +4,7 @@
 // amount is to receive or to return, and since when; fully settled people come last.
 // Tap a person to open their page. Swipe a person right to record money
 // received back or returned. With 6 or more people a search box filters by name.
+// Filters opens a sheet: show all / pending / settled, and sort order.
 // Kept apart from the Expenses tab: none of this is spending or income.
 
 import { useRouter } from 'expo-router';
@@ -11,8 +12,8 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Card } from '../../components/Card';
-import { Chip } from '../../components/Chip';
-import { ChipRow } from '../../components/ChipRow';
+import { ChoiceRow, FilterButton, FilterSheet } from '../../components/FilterSheet';
+import { ICONS } from '../../components/icons';
 import { PersonBalanceRow } from '../../components/PersonBalanceRow';
 import { SegmentedControl } from '../../components/SegmentedControl';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
@@ -21,7 +22,15 @@ import { TextField } from '../../components/TextField';
 import { TotalTile } from '../../components/TotalTile';
 import { colors, fontSize, spacing } from '../../constants/theme';
 import { getLoanBalances } from '../../db/reports';
-import { BALANCE_TEXT, PEOPLE_SORTS, personLists, repaymentFor, sortPeople } from '../../domain/loans';
+import {
+  BALANCE_TEXT,
+  PEOPLE_SHOW,
+  PEOPLE_SORTS,
+  personLists,
+  repaymentFor,
+  showPeople,
+  sortPeople,
+} from '../../domain/loans';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
 
 // Below this many people the whole list fits on a screen, so no search box is shown.
@@ -31,6 +40,12 @@ const LISTS = {
   given: { label: 'Given', empty: 'When you give money to someone, tap + on Money to receive above.' },
   taken: { label: 'Taken', empty: 'When you take money from someone, tap + on Money to return above.' },
 };
+
+// Icons for the Filters sheet rows.
+const SHOW_ICONS = { all: ICONS.people, pending: ICONS.latest, settled: ICONS.settled };
+const SORT_ICONS = { latest: ICONS.latest, largest: ICONS.largest, oldest: ICONS.oldest };
+const SHOW_CHOICES = PEOPLE_SHOW.map((option) => ({ ...option, draw: SHOW_ICONS[option.value] }));
+const SORT_CHOICES = PEOPLE_SORTS.map((option) => ({ ...option, draw: SORT_ICONS[option.value] }));
 
 /** "1 person", "3 people" */
 function peopleCount(count) {
@@ -42,7 +57,9 @@ export default function GivenTakenScreen() {
   const router = useRouter();
   const [list, setList] = useState('given');
   const [search, setSearch] = useState('');
-  const [sort, setSort] = useState('all');
+  const [show, setShow] = useState('all');
+  const [sort, setSort] = useState('latest');
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const loader = useCallback(() => getLoanBalances(db), [db]);
   const { data, error, reload } = useFocusQuery(loader);
 
@@ -57,6 +74,11 @@ export default function GivenTakenScreen() {
       params: { loanType: repaymentFor(person.status), person: person.person, amountPaise: person.amountPaise },
     });
 
+  function clearSheet() {
+    setShow('all');
+    setSort('latest');
+  }
+
   if (error) {
     return <ErrorState onRetry={reload} />;
   }
@@ -69,9 +91,10 @@ export default function GivenTakenScreen() {
   // Matches any part of the name, ignoring case: "rah" finds Rahul and Sarah.
   const term = search.trim().toLowerCase();
   const people = sortPeople(
-    inList(list).filter((person) => !term || person.person.toLowerCase().includes(term)),
+    showPeople(inList(list), show).filter((person) => !term || person.person.toLowerCase().includes(term)),
     sort,
   );
+  const filterCount = (show === 'all' ? 0 : 1) + (sort === 'latest' ? 0 : 1);
   const options = Object.entries(LISTS).map(([value, { label }]) => ({
     value,
     label: `${label} (${inList(value).length})`,
@@ -81,13 +104,23 @@ export default function GivenTakenScreen() {
     if (inList(list).length === 0) {
       return <EmptyState title="No one here yet" message={LISTS[list].empty} />;
     }
-    if (people.length === 0) {
+    if (people.length === 0 && term) {
       return (
         <EmptyState
           title="No one found"
           message={`No person matches "${search.trim()}".`}
           actionLabel="Clear search"
           onAction={() => setSearch('')}
+        />
+      );
+    }
+    if (people.length === 0) {
+      return (
+        <EmptyState
+          title="No one found"
+          message={show === 'pending' ? 'Everyone here is fully settled.' : 'No one here is fully settled yet.'}
+          actionLabel="Show everyone"
+          onAction={() => setShow('all')}
         />
       );
     }
@@ -141,26 +174,29 @@ export default function GivenTakenScreen() {
       ) : (
         <>
           <SegmentedControl options={options} value={list} onChange={setList} />
-          {data.people.length >= SEARCH_FROM ? (
-            <TextField
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search people by name"
-              returnKeyType="search"
-              autoCorrect={false}
-              accessibilityLabel="Search people by name"
-            />
-          ) : null}
-          <ChipRow>
-            {PEOPLE_SORTS.map((option) => (
-              <Chip
-                key={option.value}
-                label={option.label}
-                selected={sort === option.value}
-                onPress={() => setSort(option.value)}
+          <View style={styles.searchLine}>
+            {data.people.length >= SEARCH_FROM ? (
+              <TextField
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search people by name"
+                returnKeyType="search"
+                autoCorrect={false}
+                accessibilityLabel="Search people by name"
+                style={styles.search}
               />
-            ))}
-          </ChipRow>
+            ) : null}
+            <FilterButton count={filterCount} onPress={() => setFiltersOpen(true)} />
+          </View>
+          <FilterSheet
+            visible={filtersOpen}
+            onClose={() => setFiltersOpen(false)}
+            onClear={clearSheet}
+            showLabel={`Show ${peopleCount(people.length)}`}
+          >
+            <ChoiceRow label="Show" choices={SHOW_CHOICES} value={show} onSelect={setShow} />
+            <ChoiceRow label="Sort by" choices={SORT_CHOICES} value={sort} onSelect={setSort} />
+          </FilterSheet>
           {renderList()}
           {people.some((person) => person.status !== 'settled') ? (
             <Text style={styles.hint}>Tip: swipe a person right to record money received back or returned.</Text>
@@ -175,6 +211,9 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.lg, paddingBottom: spacing.xl },
   totals: { flexDirection: 'row', gap: spacing.md },
+  // Search on the left, Filters on the right (alone on the right when there is no search box).
+  searchLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.sm },
+  search: { flex: 1 },
   divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   hint: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center' },
 });
