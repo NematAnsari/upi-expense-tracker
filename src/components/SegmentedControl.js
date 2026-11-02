@@ -4,8 +4,9 @@ import { colors, fontSize, radius, spacing } from '../constants/theme';
 /**
  * Tabs inside a screen, side by side ("Money given | Money taken").
  * options: [{ value, label }]. The selected one is filled white on a grey track.
+ * small: smaller text, so three choices fit on a card.
  */
-export function SegmentedControl({ options, value, onChange }) {
+export function SegmentedControl({ options, value, onChange, small = false }) {
   return (
     <View style={styles.track} accessibilityRole="tablist">
       {options.map((option) => {
@@ -19,7 +20,10 @@ export function SegmentedControl({ options, value, onChange }) {
             onPress={() => onChange(option.value)}
             style={[styles.segment, selected && styles.selected]}
           >
-            <Text style={[styles.label, selected && styles.selectedLabel]} numberOfLines={1}>
+            <Text
+              style={[styles.label, small && styles.smallLabel, selected && styles.selectedLabel]}
+              numberOfLines={1}
+            >
               {option.label}
             </Text>
           </Pressable>
@@ -47,5 +51,6 @@ const styles = StyleSheet.create({
   },
   selected: { backgroundColor: colors.surface },
   label: { fontSize: fontSize.md, fontWeight: '600', color: colors.textMuted },
+  smallLabel: { fontSize: fontSize.sm },
   selectedLabel: { color: colors.text },
 });

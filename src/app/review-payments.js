@@ -11,7 +11,7 @@ import { DetectedPaymentCard } from '../components/DetectedPaymentCard';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { UndoBar } from '../components/UndoBar';
 import { colors, fontSize, spacing } from '../constants/theme';
-import { listCategories } from '../db/categories';
+import { createCategory, listCategories } from '../db/categories';
 import {
   addDetectedAsTransaction,
   detectedToTransaction,
@@ -191,6 +191,13 @@ export default function ReviewPaymentsScreen() {
     );
   }
 
+  /** "+ New" in a card's category row: saves the category and reloads the list so every card shows it. */
+  async function handleCreateCategory(name) {
+    const category = await createCategory(db, name);
+    reload();
+    return category;
+  }
+
   const handleEdit = (item) =>
     router.push({
       pathname: '/transaction/new',
@@ -286,6 +293,7 @@ export default function ReviewPaymentsScreen() {
             categories={data.categories}
             categoryId={categoryChoices[item.id] ?? item.suggestedCategoryId}
             onChangeCategory={(id) => setCategoryChoices((current) => ({ ...current, [item.id]: id }))}
+            onCreateCategory={handleCreateCategory}
             loanType={loanTypeOf(item)}
             suggestionNote={suggestionNote(item)}
             onChangeLoanType={(value) => setLoanChoices((current) => ({ ...current, [item.id]: value }))}

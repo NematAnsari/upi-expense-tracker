@@ -1,17 +1,33 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, fontSize, spacing } from '../constants/theme';
+import { colors, fontSize, radius, spacing } from '../constants/theme';
 import { LOAN_TYPES } from '../domain/loans';
-import { pickableCategories, pickVisibleCategories } from '../domain/transactionForm';
-import { formatTime } from '../utils/dates';
+import { pickableCategories } from '../domain/transactionForm';
+import { formatShortDate, formatTime } from '../utils/dates';
 import { formatINR } from '../utils/money';
 import { sourceAppName } from '../utils/sourceApps';
 import { Amount } from './Amount';
 import { Button } from './Button';
 import { Card } from './Card';
-import { Chip } from './Chip';
-import { LoanTypePicker } from './LoanTypePicker';
+import { CategoryIconRow } from './CategoryIconRow';
+import { ICONS, METHOD_ICONS, OutlineIcon } from './icons';
+import { SegmentedControl } from './SegmentedControl';
 import { TextLink } from './TextLink';
+
+// "What is this?" as a choice bar, short enough for three on a card.
+// `none` stands for a normal expense or income (no loan type).
+const CHOICES = {
+  debit: [
+    { value: 'none', label: 'Expense' },
+    { value: 'lent', label: 'I gave' },
+    { value: 'borrowed_repaid', label: 'Returned' },
+  ],
+  credit: [
+    { value: 'none', label: 'Income' },
+    { value: 'borrowed', label: 'I took' },
+    { value: 'lent_repaid', label: 'Received back' },
+  ],
+};
 
 /** "Looks like a repeat of ₹1.00 received at 4:37 PM (SMS · BOI ••2222)." */
 function describeOriginal(original) {
@@ -23,20 +39,40 @@ function describeOriginal(original) {
   return `Looks like a repeat of ${what} at ${formatTime(original.at)} (${where}). Usually safe to ignore.`;
 }
 
+/** A read-only line like the form's More details: icon, label, value on the right. */
+function InfoLine({ draw, label, value, last }) {
+  return (
+    <View style={[styles.line, !last && styles.lineBorder]}>
+      <View style={styles.lineIcon}>
+        <OutlineIcon draw={draw} />
+      </View>
+      <Text style={styles.lineLabel}>{label}</Text>
+      <Text style={styles.lineValue} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
 /**
  * One payment found in a bank SMS or UPI app notification, waiting for review.
- *
- * Layout: who (title) and how much (right), one line of details, "What is
- * this?" (expense/income, or money given/taken), the category for an expense
- * or income, one main button and small links (Review details, Ignore, Bank
- * message). Nothing is assumed: the choice is always visible before adding.
- * Possible duplicates make Ignore the main action.
+ * Laid out like the Add/Edit form:
+ *   Rahul Kumar                     −₹500.00
+ *   [ Expense | I gave | Returned ]            what is this?
+ *   Category *  (icons, scroll sideways, + New)   expenses and income only
+ *   (card) Payment method · (bank) Bank account · (cal) Date & time · (#) UPI reference · Found in
+ *   [ Add expense ]
+ *   Review details · Ignore · Bank message
+ * Nothing is assumed: the choice is always visible before adding.
+ * Possible duplicates hide the choices and make Ignore the main action.
+ * onCreateCategory(name) saves a new category and returns it (or throws).
  */
 export function DetectedPaymentCard({
   item,
   categories,
   categoryId,
   onChangeCategory,
+  onCreateCategory,
   loanType,
   onChangeLoanType,
   suggestionNote,
@@ -45,8 +81,6 @@ export function DetectedPaymentCard({
   onEdit,
   onIgnore,
 }) {
-  const [choosingCategory, setChoosingCategory] = useState(false);
-  const [showAllCategories, setShowAllCategories] = useState(false);
   // The full bank message stays folded away until asked for.
   const [showMessage, setShowMessage] = useState(false);
 
@@ -55,26 +89,8 @@ export function DetectedPaymentCard({
   const loan = loanType ? LOAN_TYPES[loanType] : null;
   // A loan is tracked per person, so it cannot be saved without a name.
   const needsName = Boolean(loan) && !item.counterparty;
-  const pickable = pickableCategories(categories);
-  const category = categories.find((candidate) => candidate.id === categoryId);
-  const shownCategories = showAllCategories ? pickable : pickVisibleCategories(pickable, categoryId);
   const mainLabel = loan ? (needsName ? 'Add name and save' : loan.addLabel) : received ? 'Add income' : 'Add expense';
   const title = item.counterparty ?? (received ? 'Money received' : 'Payment made');
-  const details = [
-    received ? 'Received' : 'Paid',
-    sourceAppName(item.sourcePackage),
-    item.accountName,
-    formatTime(item.postedAt),
-    item.reference ? `Ref …${item.reference.slice(-4)}` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-
-  function chooseCategory(id) {
-    onChangeCategory(id);
-    setChoosingCategory(false);
-    setShowAllCategories(false);
-  }
 
   return (
     <Card style={[styles.card, duplicate && styles.duplicateCard]}>
@@ -84,47 +100,61 @@ export function DetectedPaymentCard({
         </Text>
         <Amount paise={item.amountPaise} direction={item.direction} size="xl" showSign />
       </View>
-      <Text style={styles.details}>{details}</Text>
 
       {duplicate && item.original ? <Text style={styles.duplicateText}>{describeOriginal(item.original)}</Text> : null}
 
       {duplicate ? null : (
-        <View style={styles.choice}>
-          <Text style={styles.optionLabel}>What is this?</Text>
-          <LoanTypePicker direction={item.direction} value={loanType} onChange={onChangeLoanType} />
+        <View style={styles.block}>
+          <SegmentedControl
+            options={CHOICES[item.direction] ?? CHOICES.debit}
+            value={loanType ?? 'none'}
+            onChange={(value) => onChangeLoanType(value === 'none' ? null : value)}
+            small
+          />
           {suggestionNote ? <Text style={styles.suggestion}>{suggestionNote}</Text> : null}
           {loan ? <Text style={styles.note}>{loan.note}</Text> : null}
         </View>
       )}
 
+      {/* Money given and taken is saved under "Loans", so there is no category to choose. */}
       {duplicate || loan ? null : (
-        <View style={styles.categoryRow}>
-          <Text style={styles.categoryLabel}>Category</Text>
-          <TextLink label={`${category?.name ?? 'Choose'} ▾`} onPress={() => setChoosingCategory(!choosingCategory)} />
+        <View style={styles.block}>
+          <Text style={styles.sectionLabel}>
+            Category<Text style={styles.required}> *</Text>
+          </Text>
+          <CategoryIconRow
+            categories={pickableCategories(categories)}
+            selectedId={categoryId}
+            onSelect={onChangeCategory}
+            onCreate={onCreateCategory}
+          />
         </View>
       )}
-      {choosingCategory && !loan ? (
-        <View style={styles.chips}>
-          {shownCategories.map((option) => (
-            <Chip
-              key={option.id}
-              label={option.name}
-              selected={option.id === categoryId}
-              onPress={() => chooseCategory(option.id)}
-            />
-          ))}
-          {showAllCategories ? null : <Chip label="More…" onPress={() => setShowAllCategories(true)} />}
-        </View>
-      ) : null}
+
+      <View style={styles.lines}>
+        <InfoLine draw={METHOD_ICONS.UPI} label="Payment method" value="UPI" />
+        <InfoLine draw={ICONS.bank} label="Bank account" value={item.accountName ?? 'Not known'} />
+        <InfoLine
+          draw={ICONS.date}
+          label="Date & time"
+          value={`${formatShortDate(item.postedAt)}, ${formatTime(item.postedAt)}`}
+        />
+        {item.reference ? <InfoLine draw={ICONS.reference} label="UPI reference" value={item.reference} /> : null}
+        <InfoLine
+          draw={ICONS.notes}
+          label="Found in"
+          value={sourceAppName(item.sourcePackage) ?? 'Notification'}
+          last
+        />
+      </View>
 
       {duplicate ? (
-        <Button label="Ignore duplicate" onPress={onIgnore} disabled={busy} style={styles.mainButton} />
+        <Button label="Ignore duplicate" onPress={onIgnore} disabled={busy} />
       ) : (
         <Button
           label={mainLabel}
           onPress={needsName ? onEdit : onAdd}
           disabled={busy || (!loan && categoryId == null)}
-          style={styles.mainButton}
         />
       )}
 
@@ -145,7 +175,7 @@ export function DetectedPaymentCard({
       </View>
 
       {showMessage ? (
-        <View style={styles.options}>
+        <View style={styles.message}>
           {item.title ? <Text style={styles.messageTitle}>{item.title}</Text> : null}
           <Text style={styles.messageText} selectable>
             {item.rawText}
@@ -157,34 +187,37 @@ export function DetectedPaymentCard({
 }
 
 const styles = StyleSheet.create({
-  card: { gap: spacing.xs },
+  card: { gap: spacing.md },
   duplicateCard: { borderColor: colors.warning, borderWidth: 1 },
   top: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.md },
   title: { flex: 1, fontSize: fontSize.lg, fontWeight: '700', color: colors.text },
-  details: { fontSize: fontSize.sm, color: colors.textMuted },
-  duplicateText: { fontSize: fontSize.sm, color: colors.warning, marginTop: spacing.sm },
-  categoryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  duplicateText: { fontSize: fontSize.sm, color: colors.warning },
+  block: { gap: spacing.sm },
+  sectionLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.text },
+  required: { color: colors.danger },
+  suggestion: { fontSize: fontSize.sm, fontWeight: '600', color: colors.people },
+  note: { fontSize: fontSize.sm, color: colors.textMuted },
+  // Same look as the form's More details lines, a little shorter.
+  lines: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  line: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 44 },
+  lineBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  lineIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: radius.pill,
     alignItems: 'center',
-    marginTop: spacing.xs,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    justifyContent: 'center',
+    backgroundColor: colors.background,
   },
-  categoryLabel: { fontSize: fontSize.sm, color: colors.textMuted },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.xs },
-  mainButton: { marginTop: spacing.sm },
+  lineLabel: { width: 110, fontSize: fontSize.sm, color: colors.textMuted },
+  lineValue: { flex: 1, textAlign: 'right', fontSize: fontSize.sm, fontWeight: '600', color: colors.text },
   links: { flexDirection: 'row', justifyContent: 'space-around' },
-  options: {
+  message: {
     gap: spacing.sm,
     paddingTop: spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
   },
-  choice: { gap: spacing.sm, marginTop: spacing.sm },
-  suggestion: { fontSize: fontSize.sm, fontWeight: '600', color: colors.people },
-  optionLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.text },
-  note: { fontSize: fontSize.sm, color: colors.textMuted },
   messageTitle: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textMuted },
   messageText: { fontSize: fontSize.sm, color: colors.textMuted },
 });

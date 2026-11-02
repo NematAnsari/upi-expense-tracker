@@ -10,7 +10,6 @@ import {
   balanceParts,
   describeBalance,
   isValidLoanType,
-  loanChoicesFor,
   personLists,
   repaymentFor,
 } from '../src/domain/loans.js';
@@ -209,16 +208,8 @@ test('loan validation: direction must match and the person is required', () => {
   assert.equal(isValidLoanType('borrowed', 'debit'), false);
 });
 
-test('loan choices, Loans category handling and balance wording', async () => {
+test('repayments, Loans category handling and balance wording', async () => {
   const { categories } = await setup();
-  assert.deepEqual(
-    loanChoicesFor('debit').map((c) => c.label),
-    ['Expense', 'I gave money', 'Money returned'],
-  );
-  assert.deepEqual(
-    loanChoicesFor('credit').map((c) => c.label),
-    ['Income', 'I took money', 'Money received back'],
-  );
   assert.equal(repaymentFor('owesYou'), 'lent_repaid');
   assert.equal(repaymentFor('youOwe'), 'borrowed_repaid');
   assert.equal(repaymentFor('settled'), null);

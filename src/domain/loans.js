@@ -60,15 +60,6 @@ export const BALANCE_TEXT = {
   settled: 'Fully settled',
 };
 
-/** "What is this?" choices on a review card. `value: null` = a normal expense or income. */
-export function loanChoicesFor(direction) {
-  const normal = { value: null, label: direction === 'credit' ? 'Income' : 'Expense' };
-  const loans = Object.entries(LOAN_TYPES)
-    .filter(([, type]) => type.direction === direction)
-    .map(([value, type]) => ({ value, label: type.choice }));
-  return [normal, ...loans];
-}
-
 /** The repayment that settles a balance: they pay you back, or you pay them back. */
 export function repaymentFor(status) {
   if (status === 'owesYou') {

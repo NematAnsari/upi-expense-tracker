@@ -5,37 +5,6 @@ import { DEFAULT_PAYMENT_METHOD, PAYMENT_METHODS } from '../constants/categories
 import { paiseToInputString } from '../utils/money.js';
 import { LOANS_CATEGORY } from './loans.js';
 
-export const QUICK_CATEGORY_COUNT = 6;
-
-/**
- * The categories shown before "More": recently used first, then the default
- * order. The selected category is always included. The order does not change
- * when you tap a chip, so nothing jumps around under your finger.
- */
-export function pickVisibleCategories(categories, selectedId, limit = QUICK_CATEGORY_COUNT) {
-  const recent = categories
-    .filter((category) => category.lastUsedAt != null)
-    .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
-
-  const visible = [];
-  const seen = new Set();
-  for (const category of [...recent, ...categories]) {
-    if (visible.length >= limit) {
-      break;
-    }
-    if (!seen.has(category.id)) {
-      visible.push(category);
-      seen.add(category.id);
-    }
-  }
-
-  const selected = categories.find((category) => category.id === selectedId);
-  if (selected && !seen.has(selected.id)) {
-    visible.push(selected);
-  }
-  return visible;
-}
-
 export function createEmptyTransactionForm(lastPaymentMethod) {
   return {
     amountText: '',

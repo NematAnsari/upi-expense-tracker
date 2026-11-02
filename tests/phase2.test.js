@@ -7,12 +7,7 @@ import { getDashboardData } from '../src/db/reports.js';
 import { getLastPaymentMethod, suggestMerchants, suggestPurposes } from '../src/db/suggestions.js';
 import { deleteTemplate, listTemplates, markTemplateUsed, saveTemplate } from '../src/db/templates.js';
 import { createTransaction, listTransactions } from '../src/db/transactions.js';
-import {
-  applyTemplate,
-  buildTemplateName,
-  createEmptyTransactionForm,
-  pickVisibleCategories,
-} from '../src/domain/transactionForm.js';
+import { applyTemplate, buildTemplateName, createEmptyTransactionForm } from '../src/domain/transactionForm.js';
 import { validateCategoryName, validateTemplateForm } from '../src/domain/validation.js';
 import { createTestDatabase, wrapDatabase } from './helpers/testDatabase.js';
 
@@ -69,32 +64,6 @@ test('upgrading a Phase 1 database keeps existing expenses', async () => {
   assert.equal(rows[0].purpose, 'October rent');
   assert.equal(rows[0].amountPaise, 1500000);
   assert.deepEqual(await listTemplates(db), []);
-});
-
-test('recently used categories come first and chips never reorder on selection', async () => {
-  const { db, add, categoryId } = await setup();
-  let visible = pickVisibleCategories(await listCategories(db), null);
-  assert.deepEqual(
-    visible.map((c) => c.name),
-    ['Food & Dining', 'Groceries', 'Petrol & Transport', 'Shopping', 'Bills & Utilities', 'Rent'],
-  );
-
-  await add({ category: 'Health' });
-  await add({ category: 'Travel' });
-  await add({ category: 'Health' });
-  const categories = await listCategories(db);
-  visible = pickVisibleCategories(categories, null);
-  assert.deepEqual(
-    visible.slice(0, 3).map((c) => c.name),
-    ['Health', 'Travel', 'Food & Dining'],
-  );
-  assert.equal(visible.length, 6);
-
-  // Selecting a visible chip keeps the same list; a hidden selection is appended.
-  assert.deepEqual(pickVisibleCategories(categories, categoryId('Travel')), visible);
-  const withHidden = pickVisibleCategories(categories, categoryId('Transfers'));
-  assert.equal(withHidden.length, 7);
-  assert.equal(withHidden.at(-1).name, 'Transfers');
 });
 
 test('merchant suggestions: case-insensitive, most used first, latest spelling and category', async () => {
