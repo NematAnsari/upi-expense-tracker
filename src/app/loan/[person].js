@@ -9,7 +9,8 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
-import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { Amount } from '../../components/Amount';
 import { Button } from '../../components/Button';
@@ -21,6 +22,7 @@ import { colors, fontSize, radius, spacing } from '../../constants/theme';
 import { getLoanBalances } from '../../db/reports';
 import { listTransactions, renamePerson } from '../../db/transactions';
 import {
+  dueText,
   LOAN_TYPES,
   personSummary,
   reminderMessage,
@@ -290,12 +292,19 @@ export default function LoanPersonScreen() {
   const repayment = repaymentFor(balance.status);
   const remainingAfter = runningRemaining(entries);
   const timeline = timelineText(balance);
+  const due = dueText(balance);
   const summary = personSummary(balance, entries);
   // Oldest first, like a passbook. Entries arrive newest first.
   const statement = [...entries].reverse();
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    // Keeps the rename box above the keyboard.
+    <KeyboardAwareScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="handled"
+      bottomOffset={spacing.xl}
+    >
       <Card>
         <View style={styles.nameRow}>
           <View style={styles.avatar}>
@@ -335,6 +344,7 @@ export default function LoanPersonScreen() {
             </>
           )}
           {timeline ? <Text style={styles.heroDate}>{`${timeline.date} · ${timeline.duration}`}</Text> : null}
+          {due ? <Text style={[styles.heroDue, due.overdue && styles.overdue]}>{due.text}</Text> : null}
         </View>
 
         {/* Always two totals side by side; a side with nothing yet shows a grey ₹0. */}
@@ -408,7 +418,7 @@ export default function LoanPersonScreen() {
         ))}
       </Card>
       <Text style={styles.hint}>Tip: swipe a statement row right to edit it, or left to delete it.</Text>
-    </ScrollView>
+    </KeyboardAwareScrollView>
   );
 }
 
@@ -418,6 +428,8 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   pressed: { opacity: 0.6 },
   muted: { fontSize: fontSize.sm, color: colors.textMuted },
+  heroDue: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textMuted },
+  overdue: { color: colors.danger },
   zero: { fontSize: fontSize.md, fontWeight: '600', color: colors.textMuted },
   error: { fontSize: fontSize.sm, color: colors.danger },
   hint: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center' },

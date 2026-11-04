@@ -136,6 +136,27 @@ export const MIGRATIONS = [
       [Date.now()],
     );
   },
+
+  // Version 5: a "return by" date on money given or taken, split payments, and
+  // names remembered from bank SMS.
+  async (db) => {
+    await db.execAsync(`
+      ALTER TABLE transactions ADD COLUMN due_at INTEGER;
+      -- Parts of one split payment share the id of the first part.
+      ALTER TABLE transactions ADD COLUMN split_group INTEGER;
+      CREATE INDEX idx_transactions_split_group ON transactions (split_group);
+
+      -- What you saved for a name as the bank writes it ("RAHUL KUMAR S"):
+      -- your spelling, the category, and whether it was money given or taken.
+      CREATE TABLE name_memory (
+        bank_name TEXT PRIMARY KEY NOT NULL COLLATE NOCASE,
+        merchant TEXT,
+        category_id INTEGER REFERENCES categories (id) ON DELETE SET NULL,
+        loan_type TEXT CHECK (loan_type IS NULL OR loan_type IN ('lent', 'borrowed')),
+        updated_at INTEGER NOT NULL
+      );
+    `);
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length;

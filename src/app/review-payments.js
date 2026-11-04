@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
 import { Alert, Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { Button } from '../components/Button';
 import { DetectedPaymentCard } from '../components/DetectedPaymentCard';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
@@ -27,6 +28,9 @@ import { describeNet, loanLabel, maxReturnPaise, suggestLoanType } from '../doma
 import { categoryIdForSave } from '../domain/transactionForm';
 import { formatDayLabel } from '../utils/dates';
 import { formatINR } from '../utils/money';
+
+// The list scrolls a box you are typing in (a "+ New" name) above the keyboard.
+const renderKeyboardAware = (props) => <KeyboardAwareScrollView {...props} bottomOffset={spacing.xl} />;
 
 /** [{ title: 'Today', data: [...] }, { title: 'Yesterday', data: [...] }, ...] */
 function groupByDay(items) {
@@ -101,9 +105,15 @@ export default function ReviewPaymentsScreen() {
     }
   }
 
-  /** "What is this?" for an item: your choice on the card, else the suggestion, else expense/income. */
+  /**
+   * "What is this?" for an item: your choice on the card, else the suggestion
+   * (money back), else what you saved for this name last time, else expense/income.
+   */
   function loanTypeOf(item) {
-    return item.id in loanChoices ? loanChoices[item.id] : (item.suggestion?.loanType ?? null);
+    if (item.id in loanChoices) {
+      return loanChoices[item.id];
+    }
+    return item.suggestion?.loanType ?? (item.possibleDuplicate ? null : item.rememberedLoanType) ?? null;
   }
 
   /** Why the card picked money back for you, shown while that suggestion is selected. */
@@ -261,6 +271,8 @@ export default function ReviewPaymentsScreen() {
         keyExtractor={(item) => String(item.id)}
         contentContainerStyle={styles.content}
         stickySectionHeadersEnabled={false}
+        keyboardShouldPersistTaps="handled"
+        renderScrollComponent={renderKeyboardAware}
         ListHeaderComponent={
           data.items.length > 0 ? (
             <View style={styles.headerBlock}>

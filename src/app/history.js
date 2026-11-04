@@ -16,12 +16,13 @@ import { ChoiceRow, countFilters, FilterButton, FilterSheet, PaymentFilters } fr
 import { ICONS } from '../components/icons';
 import { MonthSelector } from '../components/MonthSelector';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
-import { SwipeableTransactionRow } from '../components/SwipeableTransactionRow';
+import { RepeatGroupRow } from '../components/RepeatGroupRow';
 import { TextField } from '../components/TextField';
 import { colors, fontSize, spacing } from '../constants/theme';
 import { listAccounts } from '../db/accounts';
 import { listCategories } from '../db/categories';
 import { listTransactions } from '../db/transactions';
+import { groupRepeats } from '../domain/repeats';
 import { pickableCategories } from '../domain/transactionForm';
 import { useDeleteTransaction } from '../hooks/useDeleteTransaction';
 import { useFocusQuery } from '../hooks/useFocusQuery';
@@ -100,6 +101,11 @@ export default function HistoryScreen() {
   const hasFilters = Boolean(search.trim()) || kind !== 'regular' || missingPurpose || sheetFilterCount > 0;
 
   const handleDelete = useDeleteTransaction(reload);
+  // Kept the same between renders, so rows that did not change are not redrawn.
+  const openTransaction = useCallback(
+    (transaction) => router.push({ pathname: '/transaction/[id]', params: { id: transaction.id } }),
+    [router],
+  );
   // Tapping the selected choice again clears that filter.
   const toggleFilter = (key, value) =>
     setFilters((current) => ({ ...current, [key]: current[key] === value ? null : value }));
@@ -210,8 +216,9 @@ export default function HistoryScreen() {
 
       {data ? (
         <FlatList
-          data={transactions}
-          keyExtractor={(item) => String(item.id)}
+          // Repeat purchases (same name, category and day) share one row.
+          data={groupRepeats(transactions)}
+          keyExtractor={(item) => item.key}
           contentContainerStyle={styles.list}
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={
@@ -226,14 +233,18 @@ export default function HistoryScreen() {
           }
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           renderItem={({ item }) => (
-            <SwipeableTransactionRow
-              transaction={item}
+            <RepeatGroupRow
+              group={item}
               background={colors.background}
-              onEdit={() => router.push({ pathname: '/transaction/[id]', params: { id: item.id } })}
+              onEdit={openTransaction}
               onDelete={handleDelete}
             />
           )}
           ListEmptyComponent={renderEmpty()}
+          // All months can be thousands of entries: draw about two screens at a time.
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
+          windowSize={7}
         />
       ) : null}
     </View>

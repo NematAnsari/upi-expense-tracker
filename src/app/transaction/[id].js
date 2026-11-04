@@ -86,6 +86,7 @@ export default function EditTransactionScreen() {
         amountText: paiseToInputString(transaction.amountPaise),
         direction: transaction.direction,
         loanType: transaction.loanType,
+        dueAt: transaction.dueAt,
         accountId: transaction.accountId,
         purpose: transaction.purpose ?? '',
         categoryId: transaction.categoryId,

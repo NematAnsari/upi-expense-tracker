@@ -1,32 +1,33 @@
 // Expenses tab, laid out like Given & Taken: two tiles (Spent, Received) with
-// a + to add, payments waiting for review, then this month's expenses and
+// a + to add, a to-do card (payments to review, expenses missing a purpose), then this month's expenses and
 // income with All / Paid / Received tabs, search and Filters (a sheet with sort
 // order, category, payment method and bank account icons).
 // Swipe a row right to edit or left to delete. History has every month.
+// The list is a FlatList, so a busy month only draws the rows on screen.
 // Money given to or taken from people is on its own tab (given-taken.js).
 
 import { useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, StyleSheet, Text, View } from 'react-native';
 import { Amount } from '../../components/Amount';
-import { Card } from '../../components/Card';
 import { ChoiceRow, countFilters, FilterButton, FilterSheet, PaymentFilters } from '../../components/FilterSheet';
 import { ICONS } from '../../components/icons';
 import { MonthSelector } from '../../components/MonthSelector';
-import { NoticeBar } from '../../components/NoticeBar';
 import { SegmentedControl } from '../../components/SegmentedControl';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
-import { SwipeableTransactionRow } from '../../components/SwipeableTransactionRow';
+import { RepeatGroupRow } from '../../components/RepeatGroupRow';
 import { TextField } from '../../components/TextField';
 import { TextLink } from '../../components/TextLink';
+import { TodoCard } from '../../components/TodoCard';
 import { TotalTile } from '../../components/TotalTile';
-import { colors, fontSize, spacing } from '../../constants/theme';
+import { colors, fontSize, radius, spacing } from '../../constants/theme';
 import { listAccounts } from '../../db/accounts';
 import { listCategories } from '../../db/categories';
 import { countPendingDetected } from '../../db/detected';
 import { getDashboardData } from '../../db/reports';
 import { listTransactions } from '../../db/transactions';
+import { groupRepeats } from '../../domain/repeats';
 import { pickableCategories } from '../../domain/transactionForm';
 import { useDeleteTransaction } from '../../hooks/useDeleteTransaction';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
@@ -86,8 +87,11 @@ export default function ExpensesScreen() {
   const { data, error, reload } = useFocusQuery(loader);
   const deleteWithConfirm = useDeleteTransaction(reload);
 
-  const openTransaction = (transaction) =>
-    router.push({ pathname: '/transaction/[id]', params: { id: transaction.id } });
+  // Kept the same between renders, so rows that did not change are not redrawn.
+  const openTransaction = useCallback(
+    (transaction) => router.push({ pathname: '/transaction/[id]', params: { id: transaction.id } }),
+    [router],
+  );
   const addNew = (params) => router.push({ pathname: '/transaction/new', params });
 
   // Runs only on tap. `at` makes each tap a new navigation, so History re-applies the filter.
@@ -95,7 +99,10 @@ export default function ExpensesScreen() {
     router.navigate({ pathname: '/history', params: { filter: 'missing-purpose', month: monthKey, at: Date.now() } });
   }
 
-  function renderList() {
+  function renderEmpty() {
+    if (!data) {
+      return null;
+    }
     if (data.entries.length === 0) {
       return (
         <EmptyState
@@ -126,16 +133,17 @@ export default function ExpensesScreen() {
         <EmptyState title="Nothing here yet" message={`No ${LISTS[list].label.toLowerCase()} entries this month.`} />
       );
     }
-    return (
-      <Card>
-        {shown.map((transaction, index) => (
-          <View key={transaction.id} style={index > 0 && styles.divider}>
-            <SwipeableTransactionRow transaction={transaction} onEdit={openTransaction} onDelete={deleteWithConfirm} />
-          </View>
-        ))}
-      </Card>
-    );
+    return null;
   }
+
+  // The rows look like one card: the first row has the top corners, the last the bottom ones.
+  const renderRow = ({ item, index }) => (
+    <View style={[styles.cardRow, index === 0 && styles.cardFirst, index === rows.length - 1 && styles.cardLast]}>
+      <View style={index > 0 && styles.divider}>
+        <RepeatGroupRow group={item} onEdit={openTransaction} onDelete={deleteWithConfirm} />
+      </View>
+    </View>
+  );
 
   // Filtered on the phone, so typing in search is instant. The sheet's filters
   // come first, so the tab counts follow them.
@@ -168,6 +176,9 @@ export default function ExpensesScreen() {
   );
   // Entries come newest first; sorting by Largest re-orders them (newest first on a tie).
   const shown = sort === 'largest' ? [...matching].sort((a, b) => b.amountPaise - a.amountPaise) : matching;
+  // Repeat purchases (same name, category and day) share one row; Largest orders by the row's total.
+  const grouped = groupRepeats(matching);
+  const rows = sort === 'largest' ? [...grouped].sort((a, b) => b.totalPaise - a.totalPaise) : grouped;
   // Totals of what is shown, for the line under the Filters button.
   const sum = (direction) =>
     shown.filter((entry) => entry.direction === direction).reduce((total, entry) => total + entry.amountPaise, 0);
@@ -176,8 +187,8 @@ export default function ExpensesScreen() {
     label: `${label} (${inList(value).length})`,
   }));
 
-  return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+  const header = (
+    <View style={styles.header}>
       <MonthSelector monthKey={monthKey} onChange={setMonthKey} />
 
       {error ? <ErrorState onRetry={reload} /> : null}
@@ -210,20 +221,29 @@ export default function ExpensesScreen() {
             />
           </View>
 
-          {data.missingPurposeCount > 0 ? (
-            <TextLink
-              label={`${plural(data.missingPurposeCount, 'expense needs', 'expenses need')} a purpose ›`}
-              onPress={reviewMissingPurpose}
-            />
-          ) : null}
-
-          {data.pendingCount > 0 ? (
-            <NoticeBar
-              message={`${plural(data.pendingCount, 'payment needs', 'payments need')} review`}
-              actionLabel="Review"
-              onPress={() => router.push('/review-payments')}
-            />
-          ) : null}
+          {/* Review first: those payments are not counted until added. */}
+          <TodoCard
+            items={[
+              data.pendingCount > 0 && {
+                key: 'review',
+                icon: 'review',
+                title: 'Payments to review',
+                count: data.pendingCount,
+                action: 'Review',
+                message: `${plural(data.pendingCount, 'payment needs', 'payments need')} review`,
+                onPress: () => router.push('/review-payments'),
+              },
+              data.missingPurposeCount > 0 && {
+                key: 'purpose',
+                icon: 'purpose',
+                title: 'Need a purpose',
+                count: data.missingPurposeCount,
+                action: 'Add',
+                message: `${plural(data.missingPurposeCount, 'expense needs', 'expenses need')} a purpose`,
+                onPress: reviewMissingPurpose,
+              },
+            ].filter(Boolean)}
+          />
 
           {(data.entries ?? []).length > 0 ? (
             <>
@@ -266,26 +286,68 @@ export default function ExpensesScreen() {
               </FilterSheet>
             </>
           ) : null}
-
-          {renderList()}
-
-          {shown.length > 0 ? (
-            <Text style={styles.hint}>Tip: swipe a row right to edit it, or left to delete it.</Text>
-          ) : null}
-          {(data.entries ?? []).length > 0 ? (
-            <View style={styles.viewAll}>
-              <TextLink label="View all in History ›" onPress={() => router.navigate('/history')} />
-            </View>
-          ) : null}
         </>
       ) : null}
-    </ScrollView>
+    </View>
+  );
+
+  const footer = data ? (
+    <View style={styles.footer}>
+      {shown.length > 0 ? (
+        <Text style={styles.hint}>Tip: swipe a row right to edit it, or left to delete it.</Text>
+      ) : null}
+      {(data.entries ?? []).length > 0 ? (
+        <View style={styles.viewAll}>
+          <TextLink label="View all in History ›" onPress={() => router.navigate('/history')} />
+        </View>
+      ) : null}
+    </View>
+  ) : null;
+
+  return (
+    <FlatList
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="handled"
+      data={data ? rows : []}
+      keyExtractor={(item) => item.key}
+      renderItem={renderRow}
+      ListHeaderComponent={header}
+      ListFooterComponent={footer}
+      ListEmptyComponent={renderEmpty()}
+      // Draw about two screens of rows at a time; more as you scroll.
+      initialNumToRender={12}
+      maxToRenderPerBatch={12}
+      windowSize={7}
+    />
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.lg, gap: spacing.lg, paddingBottom: spacing.xl },
+  content: { padding: spacing.lg, paddingBottom: spacing.xl },
+  header: { gap: spacing.lg, marginBottom: spacing.lg },
+  footer: { gap: spacing.lg, marginTop: spacing.lg },
+  // One card made of rows (see renderRow); same look as Card.
+  cardRow: {
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.lg,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  cardFirst: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopLeftRadius: radius.md,
+    borderTopRightRadius: radius.md,
+    paddingTop: spacing.sm,
+  },
+  cardLast: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomLeftRadius: radius.md,
+    borderBottomRightRadius: radius.md,
+    paddingBottom: spacing.sm,
+  },
   totals: { flexDirection: 'row', gap: spacing.md },
   // Search on the left, Filters on the right (alone on the right when there is no search box).
   searchLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.sm },

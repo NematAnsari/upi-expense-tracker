@@ -16,7 +16,9 @@ export const SELECT_TRANSACTION = `
     t.notes,
     t.account_id AS accountId,
     a.nickname AS accountName,
-    t.loan_type AS loanType
+    t.loan_type AS loanType,
+    t.due_at AS dueAt,
+    t.split_group AS splitGroup
   FROM transactions t
   JOIN categories c ON c.id = t.category_id
   LEFT JOIN accounts a ON a.id = t.account_id
@@ -127,8 +129,8 @@ export async function createTransaction(db, values) {
   const result = await db.runAsync(
     `INSERT INTO transactions
       (amount_paise, direction, purpose, category_id, occurred_at, payment_method, merchant, reference, notes,
-       account_id, loan_type, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       account_id, loan_type, due_at, split_group, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       values.amountPaise,
       values.direction ?? 'debit',
@@ -141,6 +143,8 @@ export async function createTransaction(db, values) {
       values.notes,
       values.accountId ?? null,
       values.loanType ?? null,
+      values.dueAt ?? null,
+      values.splitGroup ?? null,
       values.source ?? 'manual',
       now,
       now,
@@ -153,7 +157,7 @@ export async function updateTransaction(db, id, values) {
   const result = await db.runAsync(
     `UPDATE transactions SET
       amount_paise = ?, direction = ?, purpose = ?, category_id = ?, occurred_at = ?, payment_method = ?,
-      merchant = ?, reference = ?, notes = ?, account_id = ?, loan_type = ?, updated_at = ?
+      merchant = ?, reference = ?, notes = ?, account_id = ?, loan_type = ?, due_at = ?, updated_at = ?
      WHERE id = ?`,
     [
       values.amountPaise,
@@ -167,6 +171,7 @@ export async function updateTransaction(db, id, values) {
       values.notes,
       values.accountId ?? null,
       values.loanType ?? null,
+      values.dueAt ?? null,
       Date.now(),
       id,
     ],
@@ -174,6 +179,42 @@ export async function updateTransaction(db, id, values) {
   if (result.changes === 0) {
     throw new Error('This transaction no longer exists. It may have been deleted.');
   }
+}
+
+/**
+ * Saves one payment split into parts: `values` is your own share (an expense),
+ * `parts` are the shares paid for other people, each saved as money given
+ * ([{ merchant, amountPaise }]). Everything else (date, method, account,
+ * reference) is copied from `values`. All parts share split_group = the id of
+ * your share, so they can be found (and undone) together. All or nothing.
+ * `loansCategoryId`: the "Loans" category for the given parts.
+ * Returns the id of your share.
+ */
+export async function createSplitPayment(db, values, parts, loansCategoryId) {
+  let firstId = null;
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    firstId = await insertSplitPayment(txn, values, parts, loansCategoryId);
+  });
+  return firstId;
+}
+
+/** createSplitPayment without its own transaction, for callers already inside one. */
+export async function insertSplitPayment(txn, values, parts, loansCategoryId) {
+  const firstId = await createTransaction(txn, values);
+  await txn.runAsync('UPDATE transactions SET split_group = ? WHERE id = ?', [firstId, firstId]);
+  for (const part of parts) {
+    await createTransaction(txn, {
+      ...values,
+      amountPaise: part.amountPaise,
+      direction: 'debit',
+      loanType: 'lent',
+      categoryId: loansCategoryId,
+      merchant: part.merchant,
+      dueAt: null,
+      splitGroup: firstId,
+    });
+  }
+  return firstId;
 }
 
 export async function deleteTransaction(db, id) {

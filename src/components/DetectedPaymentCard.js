@@ -91,13 +91,23 @@ export function DetectedPaymentCard({
   const needsName = Boolean(loan) && !item.counterparty;
   const mainLabel = loan ? (needsName ? 'Add name and save' : loan.addLabel) : received ? 'Add income' : 'Add expense';
   const title = item.counterparty ?? (received ? 'Money received' : 'Payment made');
+  // The name was filled from what you saved last time for the bank's spelling.
+  const renamed =
+    item.bankName && item.counterparty && item.bankName.trim().toLowerCase() !== item.counterparty.trim().toLowerCase();
 
   return (
     <Card style={[styles.card, duplicate && styles.duplicateCard]}>
       <View style={styles.top}>
-        <Text style={styles.title} numberOfLines={2}>
-          {title}
-        </Text>
+        <View style={styles.titleBlock}>
+          <Text style={styles.title} numberOfLines={2}>
+            {title}
+          </Text>
+          {renamed ? (
+            <Text style={styles.bankName} numberOfLines={1}>
+              {`Bank shows "${item.bankName}" · filled from last time`}
+            </Text>
+          ) : null}
+        </View>
         <Amount paise={item.amountPaise} direction={item.direction} size="xl" showSign />
       </View>
 
@@ -190,7 +200,9 @@ const styles = StyleSheet.create({
   card: { gap: spacing.md },
   duplicateCard: { borderColor: colors.warning, borderWidth: 1 },
   top: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.md },
-  title: { flex: 1, fontSize: fontSize.lg, fontWeight: '700', color: colors.text },
+  titleBlock: { flex: 1, gap: 2 },
+  title: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text },
+  bankName: { fontSize: fontSize.xs, color: colors.textMuted },
   duplicateText: { fontSize: fontSize.sm, color: colors.warning },
   block: { gap: spacing.sm },
   sectionLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.text },

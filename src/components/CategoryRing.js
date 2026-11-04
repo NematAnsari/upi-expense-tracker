@@ -1,12 +1,9 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
-import { chartColors, chartOtherColor, colors, fontSize } from '../constants/theme';
+import { chartColors, chartOtherColor, colors } from '../constants/theme';
 import { formatINR, percentOf } from '../utils/money';
 
-const SIZE = 136;
-const STROKE = 16;
-const RADIUS = (SIZE - STROKE) / 2;
-const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+const STROKE = 18;
 // White space between two slices, so neighbouring colours never touch.
 const GAP = 2;
 
@@ -46,16 +43,16 @@ export function ringSlices(categories) {
 }
 
 /**
- * A ring of spending by category with the month's total in the middle:
- *      .--.
- *    / ₹12,400 \
- *    \  spent  /
- *      '--'
- * slices: from ringSlices. totalPaise: shown in the middle.
+ * A ring of spending by category. Nothing is written inside it, so a large
+ * total can never run into the ring; the screen shows the total above it.
+ * slices: from ringSlices. totalPaise: read out by screen readers. size: width and height.
  */
-export function CategoryRing({ slices, totalPaise }) {
+export function CategoryRing({ slices, totalPaise, size = 168 }) {
+  const radius = (size - STROKE) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const center = size / 2;
   const total = slices.reduce((sum, slice) => sum + slice.totalPaise, 0);
-  const fulls = slices.map((slice) => (total > 0 ? (slice.totalPaise / total) * CIRCUMFERENCE : 0));
+  const fulls = slices.map((slice) => (total > 0 ? (slice.totalPaise / total) * circumference : 0));
   const arcs = slices.map((slice, index) => ({
     key: slice.key,
     color: slice.color,
@@ -67,46 +64,28 @@ export function CategoryRing({ slices, totalPaise }) {
 
   return (
     <View
-      style={styles.wrap}
+      style={{ width: size, height: size }}
       accessible
       accessibilityLabel={`${formatINR(totalPaise)} spent. ${slices.map((slice) => `${slice.name} ${shortPercent(slice.percent)}`).join(', ')}`}
     >
-      <Svg width={SIZE} height={SIZE} accessible={false}>
-        <Circle cx={SIZE / 2} cy={SIZE / 2} r={RADIUS} stroke={colors.background} strokeWidth={STROKE} fill="none" />
+      <Svg width={size} height={size} accessible={false}>
+        <Circle cx={center} cy={center} r={radius} stroke={colors.background} strokeWidth={STROKE} fill="none" />
         {arcs.map((arc) => (
           <Circle
             key={arc.key}
-            cx={SIZE / 2}
-            cy={SIZE / 2}
-            r={RADIUS}
+            cx={center}
+            cy={center}
+            r={radius}
             stroke={arc.color}
             strokeWidth={STROKE}
             fill="none"
-            strokeDasharray={`${arc.length} ${CIRCUMFERENCE - arc.length}`}
+            strokeDasharray={`${arc.length} ${circumference - arc.length}`}
             strokeDashoffset={-arc.offset}
             // Start at the top and go clockwise.
-            transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
+            transform={`rotate(-90 ${center} ${center})`}
           />
         ))}
       </Svg>
-      <View style={styles.center} pointerEvents="none">
-        <Text style={styles.total} numberOfLines={1} adjustsFontSizeToFit>
-          {formatINR(totalPaise)}
-        </Text>
-        <Text style={styles.caption}>spent</Text>
-      </View>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  wrap: { width: SIZE, height: SIZE },
-  center: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: STROKE + 8,
-  },
-  total: { fontSize: fontSize.md, fontWeight: '700', color: colors.text },
-  caption: { fontSize: fontSize.xs, color: colors.textMuted },
-});

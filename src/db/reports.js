@@ -128,10 +128,11 @@ export async function checkReturnAmount(db, values, excludeId = null) {
  * People are matched by name, ignoring case and spaces at the ends.
  * Returns { people: [{ person, netPaise, status, amountPaise, lastAt, count,
  *           givenPaise, receivedBackPaise, takenPaise, returnedPaise,
- *           openSinceAt, settledAt, settledFromAt }],
+ *           openSinceAt, settledAt, settledFromAt, dueAt }],
  *           owedToYouPaise, youOwePaise, givenTodayPaise, takenTodayPaise }.
  * givenTodayPaise / takenTodayPaise: money given and taken today (by `now`).
  * openSinceAt / settledAt / settledFromAt: see settlementDates in domain/loans.js.
+ * dueAt: the latest "return by" date on their money given or taken, or null (see dueText).
  * Settled people (net 0) are listed last.
  */
 export async function getLoanBalances(db, now = new Date()) {
@@ -147,6 +148,7 @@ export async function getLoanBalances(db, now = new Date()) {
        SUM(CASE WHEN loan_type = 'borrowed' THEN amount_paise ELSE 0 END) AS takenPaise,
        SUM(CASE WHEN loan_type = 'borrowed_repaid' THEN amount_paise ELSE 0 END) AS returnedPaise,
        MAX(occurred_at) AS lastAt,
+       MAX(CASE WHEN loan_type IN ('lent', 'borrowed') THEN due_at END) AS dueAt,
        COUNT(*) AS count
      FROM transactions
      WHERE loan_type IS NOT NULL AND merchant IS NOT NULL AND trim(merchant) <> ''

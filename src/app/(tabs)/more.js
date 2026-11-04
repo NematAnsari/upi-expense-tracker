@@ -41,6 +41,12 @@ export default function MoreScreen() {
         />
         <Divider />
         <ListRow title="Bank accounts" subtitle="Name your accounts" onPress={() => router.push('/accounts')} />
+        <Divider />
+        <ListRow
+          title="Backup & restore"
+          subtitle="Save your data to a file, or bring it back"
+          onPress={() => router.push('/backup')}
+        />
       </Card>
     </ScrollView>
   );

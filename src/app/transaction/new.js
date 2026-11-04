@@ -8,7 +8,7 @@ import { listCategories } from '../../db/categories';
 import { addDetectedAsTransaction, listPendingDetected } from '../../db/detected';
 import { getLastPaymentMethod } from '../../db/suggestions';
 import { getTemplate, listTemplates, markTemplateUsed } from '../../db/templates';
-import { createTransaction } from '../../db/transactions';
+import { createSplitPayment, createTransaction } from '../../db/transactions';
 import { INCOME } from '../../domain/categorize';
 import { isValidLoanType, LOAN_TYPES } from '../../domain/loans';
 import { applyTemplate, createEmptyTransactionForm } from '../../domain/transactionForm';
@@ -109,13 +109,24 @@ export default function NewTransactionScreen() {
     setAttempt((count) => count + 1);
   }
 
-  async function handleSubmit(values) {
+  // split: { parts, loansCategoryId } when the expense was split with other people.
+  async function handleSubmit(values, split) {
     if (detectedId) {
-      await addDetectedAsTransaction(db, Number(detectedId), values);
+      await addDetectedAsTransaction(db, Number(detectedId), values, split);
+    } else if (split) {
+      await createSplitPayment(db, values, split.parts, split.loansCategoryId);
     } else {
       await createTransaction(db, values);
     }
-    showMessage(values.loanType ? 'Saved' : values.direction === 'credit' ? 'Income saved' : 'Expense saved');
+    showMessage(
+      split
+        ? 'Split saved'
+        : values.loanType
+          ? 'Saved'
+          : values.direction === 'credit'
+            ? 'Income saved'
+            : 'Expense saved',
+    );
     // New money given or taken opens the person's page, so you see the remaining
     // amount straight away. From a person's page, going back shows it already.
     if (STARTS_WITH_PERSON.includes(values.loanType) && !detectedId && !person) {
@@ -151,6 +162,7 @@ export default function NewTransactionScreen() {
       lockPerson={lockPerson}
       amountHint={lockPerson && Number(amountPaise) > 0 ? `Remaining amount: ${formatINR(Number(amountPaise))}` : null}
       checkBeforeSave={checkBeforeSave}
+      allowSplit
     />
   );
 }

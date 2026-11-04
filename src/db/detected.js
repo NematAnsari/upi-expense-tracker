@@ -4,7 +4,7 @@
 import { INCOME, suggestCategoryName, UNCATEGORIZED } from '../domain/categorize.js';
 import { parsePaymentNotification } from '../domain/paymentParser.js';
 import { findOrCreateAccount } from './accounts.js';
-import { createTransaction } from './transactions.js';
+import { createTransaction, insertSplitPayment } from './transactions.js';
 
 // Same amount, direction and account within this window might be one payment
 // reported twice. It is flagged for you to decide, never merged silently.
@@ -256,22 +256,77 @@ async function suggestCategoryId(db, detected, categories) {
   );
 }
 
+/** What you saved last time for this bank name, or null. See rememberName. */
+async function getNameMemory(db, bankName) {
+  if (!bankName) {
+    return null;
+  }
+  return db.getFirstAsync(
+    `SELECT merchant, category_id AS categoryId, loan_type AS loanType FROM name_memory WHERE bank_name = ?`,
+    [bankName.trim()],
+  );
+}
+
+/**
+ * Remembers what you saved for a name as the bank writes it, so the next
+ * payment with that name comes in already filled: your spelling ("Rahul" for
+ * "RAHUL KUMAR S"), the category (expenses and income), and whether it was
+ * money given or taken. Money received back or returned keeps what was
+ * remembered before, since those are suggested from the remaining amount.
+ */
+async function rememberName(db, bankName, values) {
+  const key = bankName?.trim();
+  if (!key) {
+    return;
+  }
+  const before = await getNameMemory(db, key);
+  const isReturn = values.loanType === 'lent_repaid' || values.loanType === 'borrowed_repaid';
+  const loanType = isReturn ? (before?.loanType ?? null) : (values.loanType ?? null);
+  const categoryId = values.loanType ? (before?.categoryId ?? null) : values.categoryId;
+  await db.runAsync(
+    `INSERT INTO name_memory (bank_name, merchant, category_id, loan_type, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (bank_name) DO UPDATE SET
+       merchant = excluded.merchant, category_id = excluded.category_id,
+       loan_type = excluded.loan_type, updated_at = excluded.updated_at`,
+    [key, values.merchant ?? null, categoryId, loanType, Date.now()],
+  );
+}
+
 /**
  * Pending items, newest first, each with a suggested category and, for
  * possible duplicates, the earlier payment it may repeat (`original`).
+ * A name seen before comes back as you saved it: `counterparty` is your
+ * spelling, `bankName` the bank's, and `rememberedLoanType` is 'lent' or
+ * 'borrowed' when you saved this name as money given or taken.
  */
 export async function listPendingDetected(db, categories) {
   const rows = await db.getAllAsync(`${SELECT_DETECTED} WHERE d.status = 'pending' ORDER BY d.posted_at DESC`);
   const withSuggestions = [];
   for (const row of rows) {
-    const suggestedCategoryId = await suggestCategoryId(db, row, categories);
+    const memory = await getNameMemory(db, row.counterparty);
+    const rememberedCategory = categories.find((category) => category.id === memory?.categoryId);
+    const suggestedCategoryId = rememberedCategory?.id ?? (await suggestCategoryId(db, row, categories));
     const suggested = categories.find((category) => category.id === suggestedCategoryId);
     const original = row.possibleDuplicate
       ? await findPossibleOriginal(db, row, row.accountId, row.postedAt, row.id)
       : null;
-    withSuggestions.push({ ...row, suggestedCategoryId, suggestedCategoryName: suggested?.name ?? null, original });
+    const rememberedLoanType = isValidRemembered(memory?.loanType, row.direction) ? memory.loanType : null;
+    withSuggestions.push({
+      ...row,
+      bankName: row.counterparty,
+      counterparty: memory?.merchant || row.counterparty,
+      rememberedLoanType,
+      suggestedCategoryId,
+      suggestedCategoryName: suggested?.name ?? null,
+      original,
+    });
   }
   return withSuggestions;
+}
+
+/** Money given is money out and money taken is money in, so only a matching direction is used. */
+function isValidRemembered(loanType, direction) {
+  return (loanType === 'lent' && direction === 'debit') || (loanType === 'borrowed' && direction === 'credit');
 }
 
 /**
@@ -288,7 +343,11 @@ export async function undoAddDetected(db, detectedId) {
       throw new Error('This payment can no longer be undone.');
     }
     if (row.transactionId != null) {
-      await txn.runAsync("DELETE FROM transactions WHERE id = ? AND source = 'notification'", [row.transactionId]);
+      // A split payment removes all its parts.
+      await txn.runAsync("DELETE FROM transactions WHERE (id = ? OR split_group = ?) AND source = 'notification'", [
+        row.transactionId,
+        row.transactionId,
+      ]);
     }
     await txn.runAsync("UPDATE detected_payments SET status = 'pending', transaction_id = NULL WHERE id = ?", [
       detectedId,
@@ -323,18 +382,26 @@ export function detectedToTransaction(detected, categoryId, loanType = null) {
 }
 
 /**
- * Saves a detected payment as a transaction and marks it added.
+ * Saves a detected payment as a transaction and marks it added. What you
+ * saved is remembered for the bank's name (see rememberName).
  * Fails (without saving) if it was already added or ignored, so a double tap
  * cannot create two expenses.
+ * split: { parts, loansCategoryId } to save it as a split payment (see createSplitPayment).
  */
-export async function addDetectedAsTransaction(db, detectedId, values) {
+export async function addDetectedAsTransaction(db, detectedId, values, split = null) {
   let transactionId = null;
   await db.withExclusiveTransactionAsync(async (txn) => {
-    const row = await txn.getFirstAsync('SELECT status FROM detected_payments WHERE id = ?', [detectedId]);
+    const row = await txn.getFirstAsync('SELECT status, counterparty FROM detected_payments WHERE id = ?', [
+      detectedId,
+    ]);
     if (row?.status !== 'pending') {
       throw new Error('This payment was already handled.');
     }
-    transactionId = await createTransaction(txn, { ...values, source: 'notification' });
+    const saved = { ...values, source: 'notification' };
+    transactionId = split
+      ? await insertSplitPayment(txn, saved, split.parts, split.loansCategoryId)
+      : await createTransaction(txn, saved);
+    await rememberName(txn, row.counterparty, values);
     await txn.runAsync("UPDATE detected_payments SET status = 'added', transaction_id = ? WHERE id = ?", [
       transactionId,
       detectedId,

@@ -13,7 +13,7 @@
 // choice: the wording on pickers ("I gave money").
 // label: the short wording in lists ("Gave money").
 
-import { formatDuration, formatOrdinalDate } from '../utils/dates.js';
+import { daysBetween, formatDuration, formatOrdinalDate, formatShortDate } from '../utils/dates.js';
 import { formatINR } from '../utils/money.js';
 
 export const LOANS_CATEGORY = 'Loans';
@@ -260,6 +260,23 @@ export function timelineText(person, now = Date.now()) {
     return { status: 'settled', date, duration, spoken: `Settled on ${date}, took ${duration}` };
   }
   return null;
+}
+
+/**
+ * The "return by" line for a person with money still left, from person.dueAt:
+ *   { overdue: false, text: 'Return by 15 Nov' }
+ *   { overdue: true, text: 'Overdue by 3 days' }
+ * null when there is no date or nothing is left.
+ */
+export function dueText(person, now = Date.now()) {
+  if (!person.dueAt || person.status === 'settled') {
+    return null;
+  }
+  if (now <= person.dueAt) {
+    return { overdue: false, text: `Return by ${formatShortDate(person.dueAt, new Date(now))}` };
+  }
+  const days = Math.max(daysBetween(person.dueAt, now), 1);
+  return { overdue: true, text: `Overdue by ${days} ${days === 1 ? 'day' : 'days'}` };
 }
 
 /** The person's net amount after each entry, as { [entry id]: netPaise }. */

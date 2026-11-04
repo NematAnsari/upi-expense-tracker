@@ -10,6 +10,10 @@ export function createEmptyTransactionForm(lastPaymentMethod) {
     amountText: '',
     direction: 'debit',
     loanType: null,
+    // "Return by" for money given or taken (ms), or null.
+    dueAt: null,
+    // Other people's shares of a split payment (see domain/split.js).
+    splits: [],
     accountId: null,
     purpose: '',
     categoryId: null,

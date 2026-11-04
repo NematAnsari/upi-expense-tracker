@@ -10,6 +10,12 @@ export const MAX_CATEGORY_NAME_LENGTH = 30;
 // 'debit' = money paid (an expense). 'credit' = money received (income).
 export const DIRECTIONS = ['debit', 'credit'];
 
+function startOfDay(ms) {
+  const date = new Date(ms);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
 function optionalText(value) {
   const trimmed = String(value ?? '').trim();
   return trimmed === '' ? null : trimmed;
@@ -55,6 +61,13 @@ export function validateTransactionForm(form, now = Date.now()) {
     errors.occurredAt = 'Date and time cannot be in the future.';
   }
 
+  // An optional "return by" date, only for money given or taken.
+  const takesDueDate = loanType === 'lent' || loanType === 'borrowed';
+  const dueAt = takesDueDate && Number.isFinite(form.dueAt) ? form.dueAt : null;
+  if (dueAt != null && Number.isFinite(form.occurredAt) && dueAt < startOfDay(form.occurredAt)) {
+    errors.dueAt = 'Return by cannot be before the date of this entry.';
+  }
+
   if (Object.keys(errors).length > 0) {
     return { errors, values: null };
   }
@@ -65,6 +78,7 @@ export function validateTransactionForm(form, now = Date.now()) {
       amountPaise: amount.paise,
       direction,
       loanType,
+      dueAt,
       accountId: Number.isInteger(form.accountId) ? form.accountId : null,
       purpose: optionalText(form.purpose),
       categoryId: form.categoryId,

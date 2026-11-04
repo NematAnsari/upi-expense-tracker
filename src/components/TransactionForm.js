@@ -1,14 +1,17 @@
+import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { Stack } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Children, useCallback, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { amountColor, colors, fontSize, spacing } from '../constants/theme';
+import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAwareScrollView, KeyboardStickyView } from 'react-native-keyboard-controller';
+import { amountColor, colors, fontSize, radius, spacing } from '../constants/theme';
 import { createAccount } from '../db/accounts';
 import { createCategory } from '../db/categories';
 import { suggestMerchants, suggestPurposes } from '../db/suggestions';
 import { deleteTemplate, markTemplateUsed, saveTemplate } from '../db/templates';
 import { INCOME } from '../domain/categorize';
 import { findSimilarPeople, LOAN_TYPES } from '../domain/loans';
+import { validateSplits } from '../domain/split';
 import {
   ACTIVITIES,
   activityFor,
@@ -20,15 +23,20 @@ import {
 import { validateTemplateForm, validateTransactionForm } from '../domain/validation';
 import { useAsyncValue } from '../hooks/useAsyncValue';
 import { showMessage } from '../ui/notify';
+import { formatOrdinalDate } from '../utils/dates';
 import { Button } from './Button';
 import { Card } from './Card';
 import { CategoryIconRow } from './CategoryIconRow';
 import { Chip } from './Chip';
 import { MoreDetailsCard } from './MoreDetailsCard';
 import { SegmentedControl } from './SegmentedControl';
+import { SplitCard, SplitToggle } from './SplitCard';
 import { SuggestionChips } from './SuggestionChips';
 import { TemplateBar, templateLabel } from './TemplateBar';
 import { TextLink } from './TextLink';
+
+// How far above the keyboard the box you are typing in stays: clear of the Save bar.
+const SAVE_BAR_SPACE = 100;
 
 // Which error message belongs to which form field.
 const ERROR_KEY_FOR_FIELD = { amountText: 'amount', categoryId: 'category' };
@@ -101,6 +109,57 @@ function DetailLine({ label, required, children, error, last }) {
 }
 
 /**
+ * "Return by" inside the Details card, for money given or taken: a pill with
+ * the date (or "Add date") that opens Android's date picker, and ✕ to clear.
+ * Optional; the Given & Taken tab shows "Return by 15 Nov" or "Overdue".
+ */
+function DueDateInput({ value, minimumMs, onChange }) {
+  function open() {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+    const start = new Date(Math.max(value ?? Date.now(), minimumMs));
+    DateTimePickerAndroid.open({
+      value: start,
+      mode: 'date',
+      minimumDate: new Date(minimumMs),
+      onChange: (event, picked) => {
+        if (event.type !== 'set' || !picked) {
+          return;
+        }
+        // End of the chosen day, so the whole day still counts as on time.
+        const due = new Date(picked);
+        due.setHours(23, 59, 0, 0);
+        onChange(due.getTime());
+      },
+    });
+  }
+  return (
+    <View style={styles.due}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={value ? `Return by ${formatOrdinalDate(value)}. Change date` : 'Add a return by date'}
+        onPress={open}
+        hitSlop={6}
+        style={({ pressed }) => [styles.duePill, pressed && styles.pressed]}
+      >
+        <Text style={[styles.dueText, !value && styles.dueEmpty]}>{value ? formatOrdinalDate(value) : 'Add date'}</Text>
+      </Pressable>
+      {value ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Remove the return by date"
+          onPress={() => onChange(null)}
+          hitSlop={8}
+        >
+          <Text style={styles.dueClear}>✕</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+/**
  * The add/edit form: a big amount, then Paid | Received (or I gave | I took),
  * a row of category icons to scroll and tap (with "+ New"), a Details card
  * (who, what for), a More details card (method, account, date and time,
@@ -114,6 +173,9 @@ function DetailLine({ label, required, children, error, last }) {
  * lockPerson: the name cannot be changed (opened from a person's page).
  * knownPeople: names already used for money given and taken, to ask "Same person as ...?".
  * mode: 'add' or 'edit', for the screen title ("Add Expense", "Edit Money Given"...).
+ * allowSplit: offer "Split with someone" on an expense (Add only). Then
+ * onSubmit(values, split) gets split = { parts, loansCategoryId } (or null):
+ * values.amountPaise is your share, parts are the others' shares.
  */
 export function TransactionForm({
   categories,
@@ -128,6 +190,7 @@ export function TransactionForm({
   checkBeforeSave,
   knownPeople = [],
   mode = 'add',
+  allowSplit = false,
 }) {
   const db = useSQLiteContext();
   const [form, setForm] = useState(initialValues);
@@ -148,6 +211,9 @@ export function TransactionForm({
   const personLabel = loan ? "Person's name" : received ? 'Received from whom?' : 'Paid to whom?';
   // "Rahul" when "Rahul Kumar" exists: probably the same person, so offer the existing name.
   const similarPeople = loan && !lockPerson ? findSimilarPeople(form.merchant, knownPeople) : [];
+  const splits = form.splits ?? [];
+  const splitting = allowSplit && activity?.key === 'paid' && splits.length > 0;
+  const takesDueDate = form.loanType === 'lent' || form.loanType === 'borrowed';
 
   const loadMerchantSuggestions = useCallback(() => suggestMerchants(db, form.merchant), [db, form.merchant]);
   const loadPurposeSuggestions = useCallback(
@@ -262,6 +328,18 @@ export function TransactionForm({
       return;
     }
 
+    // A split payment saves your share as the expense and the rest as money given.
+    let split = null;
+    if (splitting) {
+      const checked = validateSplits(result.values.amountPaise, splits);
+      if (checked.error) {
+        setErrors({ splits: checked.error });
+        return;
+      }
+      result.values.amountPaise = checked.myPaise;
+      split = { parts: checked.parts, loansCategoryId: categoryIdForSave({ loanType: 'lent' }, categoryList) };
+    }
+
     savingRef.current = true;
     setSaving(true);
     try {
@@ -273,7 +351,7 @@ export function TransactionForm({
         setSaving(false);
         return;
       }
-      await onSubmit(result.values);
+      await onSubmit(result.values, split);
       // On success the screen navigates away, so the button stays disabled.
     } catch (error) {
       console.error(error);
@@ -289,7 +367,12 @@ export function TransactionForm({
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: titleFor(form, mode) }} />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      {/* Scrolls the box you are typing in above the keyboard (and the Save bar). */}
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        bottomOffset={SAVE_BAR_SPACE}
+      >
         {/* Templates are saved expenses, so they only fit "Paid". */}
         {templatesEnabled && activity?.key === 'paid' ? (
           <TemplateBar templates={templateList} onApply={handleApplyTemplate} onLongPress={handleDeleteTemplate} />
@@ -316,6 +399,12 @@ export function TransactionForm({
           ) : amountHint ? (
             <Text style={[styles.hint, styles.centered]}>{amountHint}</Text>
           ) : null}
+          {/* Splitting belongs with the amount: part of it was paid for someone else. */}
+          {allowSplit && activity?.key === 'paid' ? (
+            <View style={styles.splitToggle}>
+              <SplitToggle splits={splits} onChange={(next) => update('splits', next)} />
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.typeBlock}>
@@ -327,6 +416,15 @@ export function TransactionForm({
           {errors.loanType ? <Text style={styles.error}>{errors.loanType}</Text> : null}
           {loan ? <Text style={styles.hint}>{loan.note}</Text> : null}
         </View>
+
+        {splitting ? (
+          <SplitCard
+            splits={splits}
+            onChange={(next) => update('splits', next)}
+            totalText={form.amountText}
+            error={errors.splits}
+          />
+        ) : null}
 
         {/* Money given and taken is saved under "Loans", so there is no category to choose. */}
         {loan ? null : (
@@ -376,6 +474,15 @@ export function TransactionForm({
               </View>
             ) : null}
           </DetailLine>
+          {takesDueDate ? (
+            <DetailLine label="Return by" error={errors.dueAt}>
+              <DueDateInput
+                value={form.dueAt ?? null}
+                minimumMs={form.occurredAt}
+                onChange={(value) => update('dueAt', value)}
+              />
+            </DetailLine>
+          ) : null}
           <DetailLine label={loan ? 'Note' : 'What for?'} last>
             <TextInput
               value={form.purpose}
@@ -409,12 +516,12 @@ export function TransactionForm({
           <TextLink label="Save as template" onPress={handleSaveTemplate} disabled={saving} />
         ) : null}
         {onDelete ? <Button label="Delete transaction" variant="danger" onPress={onDelete} disabled={saving} /> : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
-      {/* Save stays visible at the bottom, however long the form is. */}
-      <View style={styles.saveBar}>
+      {/* Save stays visible at the bottom, however long the form is, and rides on top of the keyboard. */}
+      <KeyboardStickyView style={styles.saveBar}>
         <Button label={submitLabel} onPress={handleSubmit} loading={saving} />
-      </View>
+      </KeyboardStickyView>
     </View>
   );
 }
@@ -427,6 +534,7 @@ const styles = StyleSheet.create({
   rupee: { fontSize: fontSize.xxl, fontWeight: '600', marginRight: spacing.xs },
   amount: { fontSize: 40, fontWeight: '700', minWidth: 80, textAlign: 'center' },
   centered: { textAlign: 'center' },
+  splitToggle: { marginTop: spacing.sm },
   typeBlock: { gap: spacing.sm },
   fixedType: { fontSize: fontSize.lg, fontWeight: '700', color: colors.people, textAlign: 'center' },
   hint: { fontSize: fontSize.sm, color: colors.textMuted },
@@ -440,6 +548,17 @@ const styles = StyleSheet.create({
   detailLabel: { width: 130, fontSize: fontSize.sm, color: colors.textMuted },
   detailInput: { flex: 1, textAlign: 'right', fontSize: fontSize.md, color: colors.text, paddingVertical: spacing.sm },
   locked: { color: colors.textMuted },
+  pressed: { opacity: 0.6 },
+  due: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.sm },
+  duePill: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.pill,
+    backgroundColor: colors.background,
+  },
+  dueText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.text },
+  dueEmpty: { color: colors.primary },
+  dueClear: { fontSize: fontSize.sm, color: colors.textMuted },
   similar: { gap: spacing.sm },
   similarText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.people },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },

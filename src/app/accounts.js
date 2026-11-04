@@ -4,6 +4,7 @@
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
 import { Alert, FlatList, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { AccountRow } from '../components/AccountRow';
 import { Button } from '../components/Button';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
@@ -12,6 +13,9 @@ import { colors, fontSize, spacing } from '../constants/theme';
 import { createAccount, listAccounts, renameAccount } from '../db/accounts';
 import { useFocusQuery } from '../hooks/useFocusQuery';
 import { showMessage } from '../ui/notify';
+
+// The list scrolls a box you are typing in (a "+ New" name) above the keyboard.
+const renderKeyboardAware = (props) => <KeyboardAwareScrollView {...props} bottomOffset={spacing.xl} />;
 
 export default function BankAccountsScreen() {
   const db = useSQLiteContext();
@@ -104,6 +108,7 @@ export default function BankAccountsScreen() {
       data={accounts}
       keyExtractor={(account) => String(account.id)}
       keyboardShouldPersistTaps="handled"
+      renderScrollComponent={renderKeyboardAware}
       ListHeaderComponent={header}
       ItemSeparatorComponent={() => <View style={styles.separator} />}
       renderItem={({ item }) => <AccountRow account={item} onSave={handleSave} />}

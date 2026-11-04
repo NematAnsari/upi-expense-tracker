@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, fontSize, radius, spacing } from '../constants/theme';
-import { balanceParts, timelineText } from '../domain/loans';
+import { balanceParts, dueText, timelineText } from '../domain/loans';
 import { formatINR } from '../utils/money';
 import { Amount } from './Amount';
 import { STATUS_COLORS, StatusIcon } from './StatusIcon';
@@ -29,12 +29,13 @@ export function PersonBalanceRow({ person, onPress }) {
   const iconStatus = person.status === 'settled' ? 'settled' : 'pending';
   const parts = balanceParts(person);
   const timeline = timelineText(person);
+  const due = dueText(person);
   const spoken = parts.map((part) => `${part.short} ${formatINR(part.paise)}`).join(', ');
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${person.person}, ${status.direction ? `${formatINR(person.amountPaise)} ${status.text}` : status.text}. ${spoken}${timeline ? `. ${timeline.spoken}` : ''}`}
+      accessibilityLabel={`${person.person}, ${status.direction ? `${formatINR(person.amountPaise)} ${status.text}` : status.text}. ${spoken}${timeline ? `. ${timeline.spoken}` : ''}${due ? `. ${due.text}` : ''}`}
       accessibilityHint="Opens this person's page"
       onPress={() => onPress(person)}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
@@ -58,6 +59,7 @@ export function PersonBalanceRow({ person, onPress }) {
           </Text>
         ))}
         {timeline ? <Text style={styles.date}>{timeline.date}</Text> : null}
+        {due ? <Text style={[styles.due, due.overdue && styles.overdue]}>{due.text}</Text> : null}
       </View>
       <View style={styles.right}>
         {status.direction ? <Amount paise={person.amountPaise} direction={status.direction} size="lg" /> : null}
@@ -79,6 +81,8 @@ const styles = StyleSheet.create({
   name: { fontSize: fontSize.md, fontWeight: '700', color: colors.text, marginBottom: 2 },
   part: { fontSize: fontSize.sm, color: colors.textMuted },
   date: { fontSize: fontSize.sm, color: colors.textMuted, marginTop: 2 },
+  due: { fontSize: fontSize.sm, fontWeight: '600', color: colors.textMuted },
+  overdue: { color: colors.danger },
   right: { alignItems: 'flex-end', gap: spacing.xs },
   // Kept small and light so the amount above stays the main number.
   pill: { paddingHorizontal: spacing.sm, paddingVertical: 1, borderRadius: radius.pill },

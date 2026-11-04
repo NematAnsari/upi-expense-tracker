@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, fontSize, radius, spacing } from '../constants/theme';
 import { Amount } from './Amount';
+import { CountPill } from './CountPill';
 
 /**
  * A "+" on a pale quarter circle filling the tile's top-right corner: one
@@ -14,15 +15,6 @@ function CornerPlus({ color, soft }) {
         <View style={[styles.plusBarAcross, { backgroundColor: color }]} />
         <View style={[styles.plusBarDown, { backgroundColor: color }]} />
       </View>
-    </View>
-  );
-}
-
-/** A small grey rounded badge with a number, such as the month's count. */
-function CountPill({ count }) {
-  return (
-    <View style={styles.pill}>
-      <Text style={styles.pillText}>{count}</Text>
     </View>
   );
 }
@@ -106,18 +98,6 @@ const styles = StyleSheet.create({
   zero: { fontSize: fontSize.md, fontWeight: '600', color: colors.textMuted },
   subLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, height: 18 },
   subText: { flexShrink: 1, fontSize: fontSize.sm, lineHeight: 18, color: colors.textMuted },
-  pill: {
-    minWidth: 20,
-    height: 18,
-    paddingHorizontal: 6,
-    borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.background,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  pillText: { fontSize: fontSize.xs, fontWeight: '600', color: colors.textMuted, fontVariant: ['tabular-nums'] },
   // A quarter circle: the bottom-left radius equals the size.
   cornerTab: { position: 'absolute', top: 0, right: 0, width: 42, height: 42, borderBottomLeftRadius: 42 },
   plusMark: {
