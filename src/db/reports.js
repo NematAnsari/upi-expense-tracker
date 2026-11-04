@@ -3,7 +3,7 @@
 // Loans (money lent, borrowed or paid back) are neither spending nor income,
 // so they are left out of both; see getLoanBalances for them.
 
-import { describeBalance, maxReturnPaise, settlementDates } from '../domain/loans.js';
+import { currentDueAt, describeBalance, maxReturnPaise, settlementDates } from '../domain/loans.js';
 import { getDayRange, getMonthRange, getWeekBuckets, shiftMonth } from '../utils/dates.js';
 import { averagePaise, formatINR, percentOf } from '../utils/money.js';
 import { SELECT_TRANSACTION, listTransactions } from './transactions.js';
@@ -132,7 +132,7 @@ export async function checkReturnAmount(db, values, excludeId = null) {
  *           owedToYouPaise, youOwePaise, givenTodayPaise, takenTodayPaise }.
  * givenTodayPaise / takenTodayPaise: money given and taken today (by `now`).
  * openSinceAt / settledAt / settledFromAt: see settlementDates in domain/loans.js.
- * dueAt: the latest "return by" date on their money given or taken, or null (see dueText).
+ * dueAt: the "return by" date of the amount still open, or null (see currentDueAt, dueText).
  * Settled people (net 0) are listed last.
  */
 export async function getLoanBalances(db, now = new Date()) {
@@ -148,7 +148,6 @@ export async function getLoanBalances(db, now = new Date()) {
        SUM(CASE WHEN loan_type = 'borrowed' THEN amount_paise ELSE 0 END) AS takenPaise,
        SUM(CASE WHEN loan_type = 'borrowed_repaid' THEN amount_paise ELSE 0 END) AS returnedPaise,
        MAX(occurred_at) AS lastAt,
-       MAX(CASE WHEN loan_type IN ('lent', 'borrowed') THEN due_at END) AS dueAt,
        COUNT(*) AS count
      FROM transactions
      WHERE loan_type IS NOT NULL AND merchant IS NOT NULL AND trim(merchant) <> ''
@@ -156,7 +155,7 @@ export async function getLoanBalances(db, now = new Date()) {
   );
   const entries = await db.getAllAsync(
     `SELECT id, lower(trim(merchant)) AS key, loan_type AS loanType, amount_paise AS amountPaise,
-            occurred_at AS occurredAt
+            occurred_at AS occurredAt, due_at AS dueAt
      FROM transactions
      WHERE loan_type IS NOT NULL AND merchant IS NOT NULL AND trim(merchant) <> ''`,
   );
@@ -166,12 +165,16 @@ export async function getLoanBalances(db, now = new Date()) {
   }
 
   const people = rows
-    .map(({ key, ...row }) => ({
-      ...row,
-      person: row.person.trim(),
-      ...describeBalance(row.netPaise),
-      ...settlementDates(entriesByKey[key] ?? []),
-    }))
+    .map(({ key, ...row }) => {
+      const dates = settlementDates(entriesByKey[key] ?? []);
+      return {
+        ...row,
+        person: row.person.trim(),
+        ...describeBalance(row.netPaise),
+        ...dates,
+        dueAt: currentDueAt(entriesByKey[key] ?? [], dates.openSinceAt),
+      };
+    })
     .sort((a, b) => (a.status === 'settled') - (b.status === 'settled') || b.lastAt - a.lastAt);
 
   const today = getDayRange(now);

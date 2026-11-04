@@ -8,12 +8,19 @@ import { listCategories } from '../src/db/categories.js';
 import {
   addDetectedAsTransaction,
   detectedToTransaction,
+  rememberEditedName,
   listPendingDetected,
   syncCapturedNotifications,
   undoAddDetected,
 } from '../src/db/detected.js';
 import { getLoanBalances, getSpendingTotals } from '../src/db/reports.js';
-import { createSplitPayment, createTransaction, listTransactions } from '../src/db/transactions.js';
+import {
+  createSplitPayment,
+  createTransaction,
+  listTransactions,
+  renamePerson,
+  updateTransaction,
+} from '../src/db/transactions.js';
 import { dueText } from '../src/domain/loans.js';
 import { previewMyShare, validateSplits } from '../src/domain/split.js';
 import { validateTransactionForm } from '../src/domain/validation.js';
@@ -188,4 +195,52 @@ test('backup and restore bring everything back, and bad files are refused', asyn
   assert.match(checkBackup({ ...backup, schemaVersion: 999 }).error, /newer version/);
   await assert.rejects(() => restoreBackup(fresh, { ...backup, tables: { transactions: 'x' } }), /damaged/);
   assert.equal((await listTransactions(fresh)).length, 2, 'a refused file changes nothing');
+});
+
+test('return by: a date from an earlier, settled round does not make new money overdue', async () => {
+  const { db } = await createTestDatabase();
+  const { loans } = await categoryIds(db);
+  const day = 86400000;
+  const gave = (fields) =>
+    createTransaction(db, expense(loans, { loanType: 'lent', merchant: 'Test Friend', ...fields }));
+  await gave({ amountPaise: 50000, occurredAt: posted, dueAt: posted + 2 * day });
+  await createTransaction(
+    db,
+    expense(loans, {
+      loanType: 'lent_repaid',
+      direction: 'credit',
+      merchant: 'Test Friend',
+      amountPaise: 50000,
+      occurredAt: posted + day,
+    }),
+  );
+  await gave({ amountPaise: 20000, occurredAt: posted + 10 * day });
+  const [person] = (await getLoanBalances(db)).people;
+  assert.equal(person.dueAt, null, 'the old date belonged to the settled round');
+  assert.equal(dueText(person, posted + 11 * day), null);
+});
+
+test('remembered names follow a rename and a later edit of the saved entry', async () => {
+  const { db } = await createTestDatabase();
+  const { categories, travel, loans } = await categoryIds(db);
+  await syncCapturedNotifications(db, source([sms('r1', DEBIT('600000000301'))]));
+  const [first] = await listPendingDetected(db, categories);
+  const id = await addDetectedAsTransaction(db, first.id, {
+    ...detectedToTransaction(first, loans, 'lent'),
+    merchant: 'Test P',
+  });
+  await renamePerson(db, 'Test P', 'Test Person');
+  await syncCapturedNotifications(db, source([sms('r2', DEBIT('600000000302'), posted + 86400000)]));
+  let [next] = await listPendingDetected(db, categories);
+  assert.equal(next.counterparty, 'Test Person', 'rename is remembered');
+
+  // Editing the first entry into an expense is remembered too.
+  const saved = (await listTransactions(db)).find((row) => row.id === id);
+  const edited = { ...saved, loanType: null, categoryId: travel, merchant: 'Test Shop' };
+  await updateTransaction(db, id, edited);
+  await rememberEditedName(db, id, edited);
+  [next] = await listPendingDetected(db, categories);
+  assert.equal(next.counterparty, 'Test Shop');
+  assert.equal(next.rememberedLoanType, null);
+  assert.equal(next.suggestedCategoryId, travel);
 });

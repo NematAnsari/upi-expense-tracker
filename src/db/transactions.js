@@ -225,7 +225,8 @@ export async function deleteTransaction(db, id) {
  * Renames a person on all their money given and taken entries (matched like
  * getLoanBalances: ignoring case and spaces at the ends). When the new name is
  * already someone else's, their entries end up together: that is a merge.
- * Expenses and income with the same name are not touched.
+ * Expenses and income with the same name are not touched. Names remembered
+ * from bank SMS follow too, so the next payment comes in under the new name.
  * Returns how many entries changed.
  */
 export async function renamePerson(db, oldName, newName) {
@@ -236,6 +237,10 @@ export async function renamePerson(db, oldName, newName) {
   const result = await db.runAsync(
     `UPDATE transactions SET merchant = ?, updated_at = ?
      WHERE loan_type IS NOT NULL AND lower(trim(merchant)) = lower(trim(?))`,
+    [name, Date.now(), oldName],
+  );
+  await db.runAsync(
+    'UPDATE name_memory SET merchant = ?, updated_at = ? WHERE lower(trim(merchant)) = lower(trim(?))',
     [name, Date.now(), oldName],
   );
   return result.changes;

@@ -263,6 +263,27 @@ export function timelineText(person, now = Date.now()) {
 }
 
 /**
+ * The "return by" date that applies now: the latest one set on money given or
+ * taken since the open amount started (openSinceAt, from settlementDates).
+ * A date from an earlier, settled round no longer counts. null when settled.
+ * entries: [{ loanType, occurredAt, dueAt }].
+ */
+export function currentDueAt(entries, openSinceAt) {
+  if (openSinceAt == null) {
+    return null;
+  }
+  const dates = entries
+    .filter(
+      (entry) =>
+        (entry.loanType === 'lent' || entry.loanType === 'borrowed') &&
+        entry.occurredAt >= openSinceAt &&
+        entry.dueAt != null,
+    )
+    .map((entry) => entry.dueAt);
+  return dates.length > 0 ? Math.max(...dates) : null;
+}
+
+/**
  * The "return by" line for a person with money still left, from person.dueAt:
  *   { overdue: false, text: 'Return by 15 Nov' }
  *   { overdue: true, text: 'Overdue by 3 days' }

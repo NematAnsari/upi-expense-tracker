@@ -6,6 +6,7 @@ import { TransactionForm } from '../../components/TransactionForm';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
 import { listAccounts } from '../../db/accounts';
 import { listCategories } from '../../db/categories';
+import { rememberEditedName } from '../../db/detected';
 import { checkReturnAmount, getLoanBalances } from '../../db/reports';
 import { deleteTransaction, getTransaction, updateTransaction } from '../../db/transactions';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
@@ -39,6 +40,9 @@ export default function EditTransactionScreen() {
 
   async function handleSubmit(values) {
     await updateTransaction(db, transactionId, values);
+    // A fix to a bank payment's name or category is remembered for next time.
+    // Only a helper: a failure here must not lose the saved change.
+    await rememberEditedName(db, transactionId, values).catch((memoryError) => console.error(memoryError));
     showMessage('Changes saved');
     router.back();
   }

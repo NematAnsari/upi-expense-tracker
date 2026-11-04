@@ -410,6 +410,21 @@ export async function addDetectedAsTransaction(db, detectedId, values, split = n
   return transactionId;
 }
 
+/**
+ * After you edit an entry that came from a bank SMS, remember the corrected
+ * name, category and type for that bank name, as Add does. Does nothing for
+ * entries you typed in yourself.
+ */
+export async function rememberEditedName(db, transactionId, values) {
+  const row = await db.getFirstAsync(
+    "SELECT counterparty FROM detected_payments WHERE transaction_id = ? AND status = 'added'",
+    [transactionId],
+  );
+  if (row?.counterparty) {
+    await rememberName(db, row.counterparty, values);
+  }
+}
+
 /** Undo an Ignore: the item goes back to the review list (and is re-checked there). */
 export async function restoreDetected(db, detectedId) {
   await db.runAsync("UPDATE detected_payments SET status = 'pending' WHERE id = ? AND status = 'ignored'", [
