@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, fontSize, spacing } from '../constants/theme';
 import { formatShortDate, formatTime } from '../utils/dates';
 import { formatINR } from '../utils/money';
+import { paymentText } from '../domain/shopAccount';
 import { Amount } from './Amount';
 import { CategoryIcon } from './CategoryIcon';
 import { CountPill } from './CountPill';
@@ -11,7 +12,7 @@ import { SwipeableTransactionRow } from './SwipeableTransactionRow';
 
 /** One purchase inside an open group: time, how it was paid, amount. Swipe like any row. */
 function Purchase({ transaction, onEdit, onDelete, background }) {
-  const payment = [transaction.paymentMethod, transaction.accountName].filter(Boolean).join(' · ');
+  const payment = paymentText(transaction);
   return (
     <SwipeableRow
       background={background}

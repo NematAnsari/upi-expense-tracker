@@ -55,7 +55,8 @@ export async function suggestPurposes(db, text, categoryId, limit = DEFAULT_LIMI
 /** Payment method of the most recently entered expense, or null if there are none. */
 export async function getLastPaymentMethod(db) {
   const row = await db.getFirstAsync(
-    'SELECT payment_method AS paymentMethod FROM transactions ORDER BY created_at DESC, id DESC LIMIT 1',
+    // Tea on a shop account is not really paid yet, so its method does not count.
+    'SELECT payment_method AS paymentMethod FROM transactions WHERE shop_entry IS NULL ORDER BY created_at DESC, id DESC LIMIT 1',
   );
   return row?.paymentMethod ?? null;
 }

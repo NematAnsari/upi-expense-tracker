@@ -6,7 +6,7 @@ import { LATEST_VERSION, migrateDbIfNeeded } from '../src/db/migrations.js';
 import { getDashboardData, getMonthlyReport } from '../src/db/reports.js';
 import {
   createTransaction,
-  deleteTransaction,
+  deleteTransactions,
   getTransaction,
   listTransactions,
   updateTransaction,
@@ -86,7 +86,7 @@ test('create, read, update and delete a transaction', async () => {
   assert.equal(updated.categoryName, 'Shopping');
   assert.equal(updated.notes, 'edited');
 
-  await deleteTransaction(db, id);
+  await deleteTransactions(db, [id]);
   assert.equal(await getTransaction(db, id), null);
   await assert.rejects(updateTransaction(db, id, updated), /no longer exists/);
 });
@@ -102,7 +102,7 @@ test('monthly report: totals, categories, boundaries, deletes and credits', asyn
   await add('0.20', 'Groceries', oct(21));
   await add('3000', 'Rent', new Date(2026, 9, 31, 23, 59, 59, 999).getTime()); // last moment
   const deletedId = await add('7777', 'Shopping', oct(5));
-  await deleteTransaction(db, deletedId);
+  await deleteTransactions(db, [deletedId]);
 
   // Outside October
   await add('200', 'Rent', new Date(2026, 10, 1, 0, 0).getTime()); // November 1st, 00:00

@@ -9,6 +9,9 @@ An offline-first Android app for tracking money paid and received.
 
 Built with React Native, Expo (SDK 58) and Expo Router, in JavaScript.
 
+**Full documentation** (every feature, the money rules, the database, known issues and a change log) is in
+[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md). It is updated together with every change to the app.
+
 ## Requirements
 
 | Tool          | Version                                                                   |
@@ -70,6 +73,8 @@ src/
     review-payments.js   Payments detected from bank SMS, waiting for Add or Ignore.
     auto-detect.js       Notification access, battery and alert settings.
     accounts.js          Rename bank accounts.
+    shops.js, shop/[id].js   Shop accounts (take now, pay later) and a shop's statement.
+    backup.js            Save everything to a file and restore it.
     loan/[person].js     One person's totals, remaining amount and history, with a record-return button.
     _layout.js    Opens the database, runs migrations, sets up navigation.
   components/     Reusable UI pieces (Amount, TransactionRow, TransactionForm, cards, chips...).
@@ -86,6 +91,7 @@ modules/
   upi-notification-listener/   Local native Android module (Kotlin): reads payment notifications,
                                shows the "Payment detected" alert, checks battery settings.
 tests/            Node tests for money, dates, parsing and all database logic.
+docs/             DOCUMENTATION.md, the complete reference for the app.
 ```
 
 ## Conventions

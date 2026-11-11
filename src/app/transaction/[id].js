@@ -1,16 +1,16 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback } from 'react';
-import { Alert } from 'react-native';
 import { TransactionForm } from '../../components/TransactionForm';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
 import { listAccounts } from '../../db/accounts';
 import { listCategories } from '../../db/categories';
 import { rememberEditedName } from '../../db/detected';
-import { checkReturnAmount, getLoanBalances } from '../../db/reports';
-import { deleteTransaction, getTransaction, updateTransaction } from '../../db/transactions';
+import { checkShopPayment } from '../../db/shopAccounts';
+import { checkLoanChange, checkReturnAmount, getLoanBalances } from '../../db/reports';
+import { getTransaction, updateTransaction } from '../../db/transactions';
+import { useDeleteTransaction } from '../../hooks/useDeleteTransaction';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
-import { confirmDeleteTransaction } from '../../ui/confirmDelete';
 import { paiseToInputString } from '../../utils/money';
 import { showMessage } from '../../ui/notify';
 
@@ -31,34 +31,40 @@ export default function EditTransactionScreen() {
     return { transaction, categories, accounts, people: balances.people.map((candidate) => candidate.person) };
   }, [db, transactionId]);
   const { data, error, reload } = useFocusQuery(loader);
+  // The same delete as in the lists: asks first, handles split payments, and refuses
+  // a delete that would leave money received back or returned too large.
+  const deleteWithConfirm = useDeleteTransaction(() => router.back());
 
   // The entry's own old amount is left out, so it can be edited within the remaining amount.
   async function checkBeforeSave(values) {
+    // A shop payment cannot be more than what is due there (its own old amount left out).
+    if (data.transaction.shopEntry === 'payment' && data.transaction.shopAccountId != null) {
+      const tooMuch = await checkShopPayment(db, data.transaction.shopAccountId, values.amountPaise, transactionId);
+      return tooMuch ? { amount: tooMuch } : null;
+    }
     const message = await checkReturnAmount(db, values, transactionId);
-    return message ? { amount: message } : null;
+    if (message) {
+      return { amount: message };
+    }
+    // Lowering money given or taken, changing its type or name, or moving an
+    // entry in time must not leave money received back or returned too large.
+    const refused = await checkLoanChange(db, { edit: { id: transactionId, values } });
+    return refused ? { amount: refused } : null;
   }
 
   async function handleSubmit(values) {
     await updateTransaction(db, transactionId, values);
     // A fix to a bank payment's name or category is remembered for next time.
     // Only a helper: a failure here must not lose the saved change.
-    await rememberEditedName(db, transactionId, values).catch((memoryError) => console.error(memoryError));
+    // The form does not change shop fields, so they are passed along for the memory.
+    const remembered = {
+      ...values,
+      shopEntry: data.transaction.shopEntry,
+      shopAccountId: data.transaction.shopAccountId,
+    };
+    await rememberEditedName(db, transactionId, remembered).catch((memoryError) => console.error(memoryError));
     showMessage('Changes saved');
     router.back();
-  }
-
-  async function handleDelete() {
-    if (!(await confirmDeleteTransaction(data.transaction))) {
-      return;
-    }
-    try {
-      await deleteTransaction(db, transactionId);
-      showMessage('Transaction deleted');
-      router.back();
-    } catch (deleteError) {
-      console.error(deleteError);
-      Alert.alert('Could not delete', deleteError.message || 'Please try again.');
-    }
   }
 
   if (error) {
@@ -91,6 +97,9 @@ export default function EditTransactionScreen() {
         direction: transaction.direction,
         loanType: transaction.loanType,
         dueAt: transaction.dueAt,
+        // Shop account entries keep their account; the form only needs to know a payment.
+        shopEntry: transaction.shopEntry,
+        shopName: transaction.shopName,
         accountId: transaction.accountId,
         purpose: transaction.purpose ?? '',
         categoryId: transaction.categoryId,
@@ -102,7 +111,7 @@ export default function EditTransactionScreen() {
       }}
       submitLabel="Save changes"
       onSubmit={handleSubmit}
-      onDelete={handleDelete}
+      onDelete={() => deleteWithConfirm(transaction)}
       mode="edit"
       checkBeforeSave={checkBeforeSave}
     />

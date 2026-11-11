@@ -15,6 +15,7 @@ import { colors, fontSize, spacing } from '../constants/theme';
 import { createCategory, listCategories } from '../db/categories';
 import {
   addDetectedAsTransaction,
+  addDetectedBatch,
   detectedToTransaction,
   ignoreDetected,
   listPendingDetected,
@@ -24,6 +25,7 @@ import {
 import { useFocusQuery } from '../hooks/useFocusQuery';
 import { syncDetectedPayments } from '../services/detection';
 import { checkReturnAmount, getLoanBalances } from '../db/reports';
+import { checkShopPayment, listShopAccounts, shopPaymentValues } from '../db/shopAccounts';
 import { describeNet, loanLabel, maxReturnPaise, suggestLoanType } from '../domain/loans';
 import { categoryIdForSave } from '../domain/transactionForm';
 import { formatDayLabel } from '../utils/dates';
@@ -55,12 +57,18 @@ export default function ReviewPaymentsScreen() {
   // which is how "What is this?" is stored).
   const [categoryChoices, setCategoryChoices] = useState({});
   const [loanChoices, setLoanChoices] = useState({});
+  // Which shop account a "Shop" payment goes to (item id -> account id), when there are several.
+  const [shopChoices, setShopChoices] = useState({});
   const [undoAction, setUndoAction] = useState(null);
   const hideUndo = useCallback(() => setUndoAction(null), []);
 
   const loader = useCallback(async () => {
     await syncDetectedPayments(db);
-    const [categories, balances] = await Promise.all([listCategories(db), getLoanBalances(db)]);
+    const [categories, balances, shopAccounts] = await Promise.all([
+      listCategories(db),
+      getLoanBalances(db),
+      listShopAccounts(db),
+    ]);
     const pending = await listPendingDetected(db, categories);
     // Money from (or to) someone with an open amount is probably money back: suggest it.
     // Possible duplicates hide the choice on their card, so they never get a hidden suggestion.
@@ -68,12 +76,16 @@ export default function ReviewPaymentsScreen() {
       ...item,
       suggestion: item.possibleDuplicate ? null : suggestLoanType(item, balances.people),
     }));
-    return { categories, items };
+    return { categories, items, shopAccounts };
   }, [db]);
   const { data, error, reload } = useFocusQuery(loader);
 
-  /** Runs an action once (no double taps), then offers Undo. */
-  async function runWithUndo(action, undo, message) {
+  /**
+   * Runs an action once (no double taps), then offers Undo.
+   * hasPartial(): true when the action failed after changing something (Add
+   * all stopped partway), so Undo is still offered for what was done.
+   */
+  async function runWithUndo(action, undo, message, hasPartial) {
     if (busy) {
       return;
     }
@@ -83,7 +95,14 @@ export default function ReviewPaymentsScreen() {
       setUndoAction({ message, undo });
     } catch (actionError) {
       console.error(actionError);
-      Alert.alert('Something went wrong', actionError.message || 'Please try again.');
+      const partial = Boolean(hasPartial?.());
+      Alert.alert(
+        'Something went wrong',
+        `${actionError.message || 'Please try again.'}${partial ? '\n\nThe payments already added can be undone.' : ''}`,
+      );
+      if (partial) {
+        setUndoAction({ message: 'Stopped partway. Undo removes the ones added.', undo });
+      }
     } finally {
       setBusy(false);
       reload();
@@ -108,12 +127,34 @@ export default function ReviewPaymentsScreen() {
   /**
    * "What is this?" for an item: your choice on the card, else the suggestion
    * (money back), else what you saved for this name last time, else expense/income.
+   * A loan type, 'shop' (a payment to a shop account) or null.
    */
-  function loanTypeOf(item) {
+  function choiceOf(item) {
     if (item.id in loanChoices) {
       return loanChoices[item.id];
     }
-    return item.suggestion?.loanType ?? (item.possibleDuplicate ? null : item.rememberedLoanType) ?? null;
+    if (item.suggestion) {
+      return item.suggestion.loanType;
+    }
+    if (item.possibleDuplicate) {
+      return null;
+    }
+    if (item.rememberedShopAccountId && shopOf(item)) {
+      return 'shop';
+    }
+    return item.rememberedLoanType ?? null;
+  }
+
+  /** The loan type to save: none for a shop payment. */
+  function loanTypeOf(item) {
+    const choice = choiceOf(item);
+    return choice === 'shop' ? null : choice;
+  }
+
+  /** The shop account a "Shop" payment goes to: your pick, last time's, or the first one. */
+  function shopOf(item) {
+    const id = shopChoices[item.id] ?? item.rememberedShopAccountId;
+    return data.shopAccounts.find((account) => account.id === id) ?? data.shopAccounts[0] ?? null;
   }
 
   /** Why the card picked money back for you, shown while that suggestion is selected. */
@@ -130,6 +171,10 @@ export default function ReviewPaymentsScreen() {
 
   /** The transaction an item becomes with the choices made on its card. */
   function transactionFor(item) {
+    if (choiceOf(item) === 'shop') {
+      const shop = shopOf(item);
+      return shopPaymentValues(shop, detectedToTransaction(item, shop.categoryId, null));
+    }
     const loanType = loanTypeOf(item);
     const categoryId = categoryIdForSave(
       { loanType, categoryId: categoryChoices[item.id] ?? item.suggestedCategoryId },
@@ -140,13 +185,14 @@ export default function ReviewPaymentsScreen() {
 
   /**
    * Ready for "Add all": not a possible duplicate, has a category, money given or
-   * taken has a name, and it is not money received back or returned (those are
-   * checked against the remaining amount one at a time).
+   * taken has a name, and it is not money received back or returned or a shop
+   * payment (those are checked against what is left, one at a time).
    */
   function isReady(item) {
     const values = transactionFor(item);
     return (
       !item.possibleDuplicate &&
+      choiceOf(item) !== 'shop' &&
       values.categoryId != null &&
       (!values.loanType || Boolean(item.counterparty)) &&
       maxReturnPaise(values.loanType, 0) === null
@@ -155,13 +201,21 @@ export default function ReviewPaymentsScreen() {
 
   async function handleAdd(item) {
     const values = transactionFor(item);
-    // Money received back or returned cannot be more than the remaining amount.
+    // Money received back or returned cannot be more than the remaining amount,
+    // and a shop payment cannot be more than what is due there.
     let tooMuch = null;
     try {
-      tooMuch = await checkReturnAmount(db, values);
+      tooMuch = values.shopEntry
+        ? await checkShopPayment(db, values.shopAccountId, values.amountPaise)
+        : await checkReturnAmount(db, values);
     } catch (checkError) {
       console.error(checkError);
       Alert.alert('Something went wrong', checkError.message || 'Please try again.');
+      return;
+    }
+    if (tooMuch && values.shopEntry) {
+      // A shop payment has no Review details: the amount comes from the bank.
+      Alert.alert('Check the amount', `${tooMuch}\n\nChoose another option for this payment.`);
       return;
     }
     if (tooMuch) {
@@ -171,7 +225,13 @@ export default function ReviewPaymentsScreen() {
       ]);
       return;
     }
-    const kind = values.loanType ? loanLabel(values.loanType) : item.direction === 'credit' ? 'Income' : 'Expense';
+    const kind = values.shopEntry
+      ? `Payment to ${values.merchant}`
+      : values.loanType
+        ? loanLabel(values.loanType)
+        : item.direction === 'credit'
+          ? 'Income'
+          : 'Expense';
     const save = () =>
       runWithUndo(
         () => addDetectedAsTransaction(db, item.id, values),
@@ -236,9 +296,13 @@ export default function ReviewPaymentsScreen() {
             const added = [];
             runWithUndo(
               async () => {
-                for (const item of ready) {
-                  await addDetectedAsTransaction(db, item.id, transactionFor(item));
-                  added.push(item.id);
+                const result = await addDetectedBatch(
+                  db,
+                  ready.map((item) => ({ id: item.id, values: transactionFor(item) })),
+                );
+                added.push(...result.addedIds);
+                if (result.error) {
+                  throw result.error;
                 }
               },
               async () => {
@@ -247,6 +311,7 @@ export default function ReviewPaymentsScreen() {
                 }
               },
               `Added ${ready.length} ${ready.length === 1 ? 'payment' : 'payments'}`,
+              () => added.length > 0,
             );
           },
         },
@@ -306,7 +371,10 @@ export default function ReviewPaymentsScreen() {
             categoryId={categoryChoices[item.id] ?? item.suggestedCategoryId}
             onChangeCategory={(id) => setCategoryChoices((current) => ({ ...current, [item.id]: id }))}
             onCreateCategory={handleCreateCategory}
-            loanType={loanTypeOf(item)}
+            loanType={choiceOf(item)}
+            shopAccounts={data.shopAccounts}
+            shopAccount={shopOf(item)}
+            onChangeShopAccount={(id) => setShopChoices((current) => ({ ...current, [item.id]: id }))}
             suggestionNote={suggestionNote(item)}
             onChangeLoanType={(value) => setLoanChoices((current) => ({ ...current, [item.id]: value }))}
             busy={busy}

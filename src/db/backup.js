@@ -3,13 +3,15 @@
 // Captured bank messages (detected_payments) are left out: they hold the raw
 // SMS text, and everything you added from them is already in transactions.
 
+import { INCOME, UNCATEGORIZED } from '../domain/categorize.js';
+import { LOANS_CATEGORY } from '../domain/loans.js';
 import { LATEST_VERSION } from './migrations.js';
 
 const BACKUP_APP = 'upi-expense-tracker';
 const BACKUP_FORMAT = 1;
 
 // Parents before children, so foreign keys always find their row on restore.
-const TABLES = ['categories', 'accounts', 'templates', 'transactions', 'name_memory', 'settings'];
+const TABLES = ['categories', 'accounts', 'shop_accounts', 'templates', 'transactions', 'name_memory', 'settings'];
 
 const LAST_BACKUP_KEY = 'last_backup_at';
 
@@ -69,13 +71,18 @@ export function checkBackup(backup) {
       return { error: 'This backup file is damaged.' };
     }
   }
+  // Every real backup has categories. Without them nothing could be saved after restoring.
+  if ((backup.tables.categories ?? []).length === 0) {
+    return { error: 'This backup file is damaged.' };
+  }
   return { summary: { entries: (backup.tables.transactions ?? []).length, createdAt: backup.createdAt ?? null } };
 }
 
 /**
  * Replaces everything on this phone with the backup. All or nothing: if any
  * row fails, nothing changes. A backup from an older version still works:
- * columns it does not have get their defaults.
+ * columns it does not have get their defaults, and the built-in categories
+ * it lacks (Income, Uncategorized, Loans) are added.
  */
 export async function restoreBackup(db, backup) {
   const checked = checkBackup(backup);
@@ -108,6 +115,16 @@ export async function restoreBackup(db, backup) {
           columns.map((name) => row[name]),
         );
       }
+    }
+    // Categories the app relies on were added in later versions (3 and 4). A
+    // backup from before that does not have them, and without Loans money
+    // given or taken could not be saved. Already there: left as it is.
+    for (const name of [INCOME, UNCATEGORIZED, LOANS_CATEGORY]) {
+      await txn.runAsync(
+        `INSERT OR IGNORE INTO categories (name, is_default, sort_order, created_at)
+         VALUES (?, 1, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM categories), ?)`,
+        [name, Date.now()],
+      );
     }
   });
   return checked.summary;

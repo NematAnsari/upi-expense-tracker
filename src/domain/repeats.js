@@ -27,7 +27,8 @@ export function groupRepeats(transactions) {
   for (const transaction of transactions) {
     const name = nameOf(transaction);
     const key = name
-      ? `${dayOf(transaction.occurredAt)}|${name}|${transaction.categoryId}|${transaction.direction}`
+      ? // A payment to a shop account never joins the teas it pays for.
+        `${dayOf(transaction.occurredAt)}|${name}|${transaction.categoryId}|${transaction.direction}|${transaction.shopEntry ?? ''}`
       : `id|${transaction.id}`;
     let group = byKey.get(key);
     if (!group) {

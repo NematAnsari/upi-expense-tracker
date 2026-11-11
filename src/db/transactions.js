@@ -1,6 +1,9 @@
 // Every query uses `?` placeholders. Values are passed separately, never pasted
 // into the SQL string, which prevents SQL injection and quoting bugs.
 
+// Paying a shop account only lowers what is due there; it is never spending.
+export const NOT_SHOP_PAYMENT = "t.shop_entry IS NOT 'payment'";
+
 export const SELECT_TRANSACTION = `
   SELECT
     t.id,
@@ -18,10 +21,14 @@ export const SELECT_TRANSACTION = `
     a.nickname AS accountName,
     t.loan_type AS loanType,
     t.due_at AS dueAt,
-    t.split_group AS splitGroup
+    t.split_group AS splitGroup,
+    t.shop_account_id AS shopAccountId,
+    t.shop_entry AS shopEntry,
+    s.name AS shopName
   FROM transactions t
   JOIN categories c ON c.id = t.category_id
   LEFT JOIN accounts a ON a.id = t.account_id
+  LEFT JOIN shop_accounts s ON s.id = t.shop_account_id
 `;
 
 /**
@@ -72,7 +79,8 @@ export async function listTransactions(db, filters = {}) {
   }
   if (missingPurpose) {
     // Incoming money and loans do not need a purpose to be complete.
-    where.push("t.purpose IS NULL AND t.direction = 'debit' AND t.loan_type IS NULL");
+    // Tea on a shop account is named by the shop, so it needs no purpose either.
+    where.push("t.purpose IS NULL AND t.direction = 'debit' AND t.loan_type IS NULL AND t.shop_entry IS NULL");
   }
   if (accountId != null) {
     where.push('t.account_id = ?');
@@ -93,10 +101,11 @@ export async function listTransactions(db, filters = {}) {
     where.push('lower(trim(t.merchant)) = lower(trim(?))');
     params.push(person);
   }
+  // Payments to a shop account are not spending (the teas already were), so they are left out too.
   if (kind === 'regular') {
-    where.push('t.loan_type IS NULL');
+    where.push(`t.loan_type IS NULL AND ${NOT_SHOP_PAYMENT}`);
   } else if (kind === 'paid' || kind === 'received') {
-    where.push('t.loan_type IS NULL AND t.direction = ?');
+    where.push(`t.loan_type IS NULL AND ${NOT_SHOP_PAYMENT} AND t.direction = ?`);
     params.push(kind === 'paid' ? 'debit' : 'credit');
   } else if (kind === 'given') {
     where.push("t.loan_type IN ('lent', 'lent_repaid')");
@@ -129,8 +138,8 @@ export async function createTransaction(db, values) {
   const result = await db.runAsync(
     `INSERT INTO transactions
       (amount_paise, direction, purpose, category_id, occurred_at, payment_method, merchant, reference, notes,
-       account_id, loan_type, due_at, split_group, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       account_id, loan_type, due_at, split_group, shop_account_id, shop_entry, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       values.amountPaise,
       values.direction ?? 'debit',
@@ -145,6 +154,8 @@ export async function createTransaction(db, values) {
       values.loanType ?? null,
       values.dueAt ?? null,
       values.splitGroup ?? null,
+      values.shopAccountId ?? null,
+      values.shopEntry ?? null,
       values.source ?? 'manual',
       now,
       now,
@@ -217,8 +228,36 @@ export async function insertSplitPayment(txn, values, parts, loansCategoryId) {
   return firstId;
 }
 
-export async function deleteTransaction(db, id) {
-  await db.runAsync('DELETE FROM transactions WHERE id = ?', [id]);
+/**
+ * The parts of a split payment: every entry that shares the split group
+ * (your share and the shares for other people), your share first.
+ */
+export async function listSplitParts(db, splitGroup) {
+  return db.getAllAsync(
+    `SELECT id, amount_paise AS amountPaise, merchant, loan_type AS loanType
+     FROM transactions WHERE split_group = ? ORDER BY id`,
+    [splitGroup],
+  );
+}
+
+/**
+ * Deletes entries together. A payment that came from a bank SMS goes back to
+ * Review (waiting) instead of staying marked as added, so it can be reviewed
+ * again and is not mistaken for a duplicate of something that no longer exists.
+ */
+export async function deleteTransactions(db, ids) {
+  if (ids.length === 0) {
+    return;
+  }
+  const marks = ids.map(() => '?').join(', ');
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
+      `UPDATE detected_payments SET status = 'pending', transaction_id = NULL
+       WHERE status = 'added' AND transaction_id IN (${marks})`,
+      ids,
+    );
+    await txn.runAsync(`DELETE FROM transactions WHERE id IN (${marks})`, ids);
+  });
 }
 
 /**

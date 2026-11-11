@@ -3,6 +3,7 @@
 
 import { INCOME, suggestCategoryName, UNCATEGORIZED } from '../domain/categorize.js';
 import { parsePaymentNotification } from '../domain/paymentParser.js';
+import { pickableCategoryId } from '../domain/transactionForm.js';
 import { findOrCreateAccount } from './accounts.js';
 import { createTransaction, insertSplitPayment } from './transactions.js';
 
@@ -47,6 +48,18 @@ async function isKnownReference(db, reference, amountPaise, selfId) {
     [reference, amountPaise, selfId ?? -1],
   );
   if (saved) {
+    return true;
+  }
+  // A split stores only its shares, so compare with the total of each split too.
+  const split = await db.getFirstAsync(
+    `SELECT t.split_group FROM transactions t
+     WHERE t.split_group IS NOT NULL AND t.reference = ?
+       AND t.split_group NOT IN (SELECT transaction_id FROM detected_payments WHERE id = ? AND transaction_id IS NOT NULL)
+     GROUP BY t.split_group HAVING SUM(t.amount_paise) = ?
+     LIMIT 1`,
+    [reference, selfId ?? -1, amountPaise],
+  );
+  if (split) {
     return true;
   }
   const detected = await db.getFirstAsync(
@@ -100,7 +113,7 @@ async function findPossibleOriginal(db, { direction, amountPaise, reference }, a
   if (detected) {
     return detected;
   }
-  return db.getFirstAsync(
+  const saved = await db.getFirstAsync(
     `SELECT 'saved' AS kind, t.direction, t.amount_paise AS amountPaise, t.occurred_at AS at,
             a.nickname AS accountName, NULL AS sourcePackage, 'added' AS status
      FROM transactions t
@@ -110,6 +123,23 @@ async function findPossibleOriginal(db, { direction, amountPaise, reference }, a
        AND t.id NOT IN (SELECT transaction_id FROM detected_payments WHERE id = ? AND transaction_id IS NOT NULL)
      LIMIT 1`,
     [direction, amountPaise, from, to, ref, selfId ?? -1],
+  );
+  if (saved) {
+    return saved;
+  }
+  // A split payment is saved as its shares (say ₹125 and ₹125), but the bank
+  // reports the whole ₹250. So compare with the total of each split too.
+  return db.getFirstAsync(
+    `SELECT 'saved' AS kind, t.direction, SUM(t.amount_paise) AS amountPaise, MIN(t.occurred_at) AS at,
+            a.nickname AS accountName, NULL AS sourcePackage, 'added' AS status
+     FROM transactions t
+     LEFT JOIN accounts a ON a.id = t.account_id
+     WHERE t.split_group IS NOT NULL AND t.direction = ? AND t.occurred_at BETWEEN ? AND ?
+       AND (t.reference IS NULL OR ? IS NULL)
+       AND t.split_group NOT IN (SELECT transaction_id FROM detected_payments WHERE id = ? AND transaction_id IS NOT NULL)
+     GROUP BY t.split_group HAVING SUM(t.amount_paise) = ?
+     LIMIT 1`,
+    [direction, from, to, ref, selfId ?? -1, amountPaise],
   );
 }
 
@@ -236,12 +266,16 @@ export async function countPendingDetected(db) {
   return row?.count ?? 0;
 }
 
-/** The category to suggest: what you used before for this name, else a keyword match. */
+/**
+ * The category to suggest: what you used before for this name, else a keyword
+ * match. Money given or taken is left out: it is saved under the hidden
+ * "Loans" category, which must never be suggested for an expense.
+ */
 async function suggestCategoryId(db, detected, categories) {
   if (detected.direction === 'debit' && detected.counterparty) {
     const previous = await db.getFirstAsync(
       `SELECT category_id AS categoryId FROM transactions
-       WHERE lower(merchant) = lower(?) AND direction = 'debit'
+       WHERE lower(merchant) = lower(?) AND direction = 'debit' AND loan_type IS NULL
        ORDER BY created_at DESC LIMIT 1`,
       [detected.counterparty],
     );
@@ -262,7 +296,8 @@ async function getNameMemory(db, bankName) {
     return null;
   }
   return db.getFirstAsync(
-    `SELECT merchant, category_id AS categoryId, loan_type AS loanType FROM name_memory WHERE bank_name = ?`,
+    `SELECT merchant, category_id AS categoryId, loan_type AS loanType, shop_account_id AS shopAccountId
+     FROM name_memory WHERE bank_name = ?`,
     [bankName.trim()],
   );
 }
@@ -273,6 +308,7 @@ async function getNameMemory(db, bankName) {
  * "RAHUL KUMAR S"), the category (expenses and income), and whether it was
  * money given or taken. Money received back or returned keeps what was
  * remembered before, since those are suggested from the remaining amount.
+ * A payment to a shop account remembers that account.
  */
 async function rememberName(db, bankName, values) {
   const key = bankName?.trim();
@@ -283,12 +319,14 @@ async function rememberName(db, bankName, values) {
   const isReturn = values.loanType === 'lent_repaid' || values.loanType === 'borrowed_repaid';
   const loanType = isReturn ? (before?.loanType ?? null) : (values.loanType ?? null);
   const categoryId = values.loanType ? (before?.categoryId ?? null) : values.categoryId;
+  const shopAccountId = values.shopEntry === 'payment' ? values.shopAccountId : null;
   await db.runAsync(
-    `INSERT INTO name_memory (bank_name, merchant, category_id, loan_type, updated_at) VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO name_memory (bank_name, merchant, category_id, loan_type, shop_account_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT (bank_name) DO UPDATE SET
-       merchant = excluded.merchant, category_id = excluded.category_id,
-       loan_type = excluded.loan_type, updated_at = excluded.updated_at`,
-    [key, values.merchant ?? null, categoryId, loanType, Date.now()],
+       merchant = excluded.merchant, category_id = excluded.category_id, loan_type = excluded.loan_type,
+       shop_account_id = excluded.shop_account_id, updated_at = excluded.updated_at`,
+    [key, values.merchant ?? null, categoryId, loanType, shopAccountId, Date.now()],
   );
 }
 
@@ -298,14 +336,16 @@ async function rememberName(db, bankName, values) {
  * A name seen before comes back as you saved it: `counterparty` is your
  * spelling, `bankName` the bank's, and `rememberedLoanType` is 'lent' or
  * 'borrowed' when you saved this name as money given or taken.
+ * `rememberedShopAccountId`: the shop account you paid from this name last time.
  */
 export async function listPendingDetected(db, categories) {
   const rows = await db.getAllAsync(`${SELECT_DETECTED} WHERE d.status = 'pending' ORDER BY d.posted_at DESC`);
   const withSuggestions = [];
   for (const row of rows) {
     const memory = await getNameMemory(db, row.counterparty);
-    const rememberedCategory = categories.find((category) => category.id === memory?.categoryId);
-    const suggestedCategoryId = rememberedCategory?.id ?? (await suggestCategoryId(db, row, categories));
+    // A remembered "Loans" category is not used: you cannot pick it for an expense.
+    const rememberedCategoryId = pickableCategoryId(categories, memory?.categoryId);
+    const suggestedCategoryId = rememberedCategoryId ?? (await suggestCategoryId(db, row, categories));
     const suggested = categories.find((category) => category.id === suggestedCategoryId);
     const original = row.possibleDuplicate
       ? await findPossibleOriginal(db, row, row.accountId, row.postedAt, row.id)
@@ -316,6 +356,7 @@ export async function listPendingDetected(db, categories) {
       bankName: row.counterparty,
       counterparty: memory?.merchant || row.counterparty,
       rememberedLoanType,
+      rememberedShopAccountId: row.direction === 'debit' ? (memory?.shopAccountId ?? null) : null,
       suggestedCategoryId,
       suggestedCategoryName: suggested?.name ?? null,
       original,
@@ -353,6 +394,24 @@ export async function undoAddDetected(db, detectedId) {
       detectedId,
     ]);
   });
+}
+
+/**
+ * Adds several detected payments one by one: entries is [{ id, values }].
+ * Stops at the first failure and reports it instead of throwing, so the ones
+ * already added are known and can be undone. Returns { addedIds, error }.
+ */
+export async function addDetectedBatch(db, entries) {
+  const addedIds = [];
+  for (const { id, values } of entries) {
+    try {
+      await addDetectedAsTransaction(db, id, values);
+      addedIds.push(id);
+    } catch (error) {
+      return { addedIds, error };
+    }
+  }
+  return { addedIds, error: null };
 }
 
 /** Recent captures of every status, for the Payment Detection screen. */

@@ -10,6 +10,7 @@ import { Amount } from './Amount';
 import { Button } from './Button';
 import { Card } from './Card';
 import { CategoryIconRow } from './CategoryIconRow';
+import { Chip } from './Chip';
 import { ICONS, METHOD_ICONS, OutlineIcon } from './icons';
 import { SegmentedControl } from './SegmentedControl';
 import { TextLink } from './TextLink';
@@ -28,6 +29,10 @@ const CHOICES = {
     { value: 'lent_repaid', label: 'Received back' },
   ],
 };
+
+// Paying a shop account (tea taken now, paid later). Offered for money paid,
+// once you have a shop account.
+const SHOP_CHOICE = { value: 'shop', label: 'Shop' };
 
 /** "Looks like a repeat of ₹1.00 received at 4:37 PM (SMS · BOI ••2222)." */
 function describeOriginal(original) {
@@ -66,6 +71,8 @@ function InfoLine({ draw, label, value, last }) {
  * Nothing is assumed: the choice is always visible before adding.
  * Possible duplicates hide the choices and make Ignore the main action.
  * onCreateCategory(name) saves a new category and returns it (or throws).
+ * loanType: a loan type, 'shop' (a payment to a shop account) or null.
+ * shopAccounts / shopAccount / onChangeShopAccount(id): for the Shop choice.
  */
 export function DetectedPaymentCard({
   item,
@@ -80,16 +87,32 @@ export function DetectedPaymentCard({
   onAdd,
   onEdit,
   onIgnore,
+  shopAccounts = [],
+  shopAccount = null,
+  onChangeShopAccount,
 }) {
   // The full bank message stays folded away until asked for.
   const [showMessage, setShowMessage] = useState(false);
 
   const received = item.direction === 'credit';
   const duplicate = Boolean(item.possibleDuplicate);
-  const loan = loanType ? LOAN_TYPES[loanType] : null;
+  const shop = loanType === 'shop' ? shopAccount : null;
+  const loan = loanType && !shop ? LOAN_TYPES[loanType] : null;
+  const choices = [
+    ...(CHOICES[item.direction] ?? CHOICES.debit),
+    ...(item.direction === 'debit' && shopAccounts.length > 0 ? [SHOP_CHOICE] : []),
+  ];
   // A loan is tracked per person, so it cannot be saved without a name.
   const needsName = Boolean(loan) && !item.counterparty;
-  const mainLabel = loan ? (needsName ? 'Add name and save' : loan.addLabel) : received ? 'Add income' : 'Add expense';
+  const mainLabel = shop
+    ? 'Add as shop payment'
+    : loan
+      ? needsName
+        ? 'Add name and save'
+        : loan.addLabel
+      : received
+        ? 'Add income'
+        : 'Add expense';
   const title = item.counterparty ?? (received ? 'Money received' : 'Payment made');
   // The name was filled from what you saved last time for the bank's spelling.
   const renamed =
@@ -116,18 +139,37 @@ export function DetectedPaymentCard({
       {duplicate ? null : (
         <View style={styles.block}>
           <SegmentedControl
-            options={CHOICES[item.direction] ?? CHOICES.debit}
+            options={choices}
             value={loanType ?? 'none'}
             onChange={(value) => onChangeLoanType(value === 'none' ? null : value)}
             small
           />
           {suggestionNote ? <Text style={styles.suggestion}>{suggestionNote}</Text> : null}
           {loan ? <Text style={styles.note}>{loan.note}</Text> : null}
+          {shop ? (
+            <>
+              {shopAccounts.length > 1 ? (
+                <View style={styles.shops}>
+                  {shopAccounts.map((account) => (
+                    <Chip
+                      key={account.id}
+                      label={account.name}
+                      selected={account.id === shop.id}
+                      onPress={() => onChangeShopAccount(account.id)}
+                    />
+                  ))}
+                </View>
+              ) : null}
+              <Text style={styles.note}>
+                {`Lowers what is due at ${shop.name} (${formatINR(shop.duePaise)} now). Not counted as spending again: the teas already were.`}
+              </Text>
+            </>
+          ) : null}
         </View>
       )}
 
       {/* Money given and taken is saved under "Loans", so there is no category to choose. */}
-      {duplicate || loan ? null : (
+      {duplicate || loan || shop ? null : (
         <View style={styles.block}>
           <Text style={styles.sectionLabel}>
             Category<Text style={styles.required}> *</Text>
@@ -164,7 +206,7 @@ export function DetectedPaymentCard({
         <Button
           label={mainLabel}
           onPress={needsName ? onEdit : onAdd}
-          disabled={busy || (!loan && categoryId == null)}
+          disabled={busy || (!loan && !shop && categoryId == null)}
         />
       )}
 
@@ -173,7 +215,8 @@ export function DetectedPaymentCard({
           <TextLink label="Add anyway" onPress={onAdd} disabled={busy} />
         ) : (
           <>
-            <TextLink label="Review details" onPress={onEdit} disabled={busy} />
+            {/* A shop payment has nothing more to fill in. */}
+            {shop ? null : <TextLink label="Review details" onPress={onEdit} disabled={busy} />}
             <TextLink label="Ignore" onPress={onIgnore} disabled={busy} muted />
           </>
         )}
@@ -209,6 +252,7 @@ const styles = StyleSheet.create({
   required: { color: colors.danger },
   suggestion: { fontSize: fontSize.sm, fontWeight: '600', color: colors.people },
   note: { fontSize: fontSize.sm, color: colors.textMuted },
+  shops: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   // Same look as the form's More details lines, a little shorter.
   lines: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   line: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 44 },

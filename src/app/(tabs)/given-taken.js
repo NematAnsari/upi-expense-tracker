@@ -180,7 +180,8 @@ export default function GivenTakenScreen() {
         <>
           <SegmentedControl options={options} value={list} onChange={setList} />
           <View style={styles.searchLine}>
-            {data.people.length >= SEARCH_FROM ? (
+            {/* Stays while it has text, so a search you typed can always be seen and cleared. */}
+            {data.people.length >= SEARCH_FROM || search.trim() ? (
               <TextField
                 value={search}
                 onChangeText={setSearch}

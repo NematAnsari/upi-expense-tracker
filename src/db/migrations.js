@@ -157,6 +157,33 @@ export const MIGRATIONS = [
       );
     `);
   },
+
+  // Version 6: shop accounts, like a diary kept with a tea shop. You take tea
+  // now and pay later: each tea is spending on its day (shop_entry 'purchase'),
+  // and paying the shop only lowers what is due (shop_entry 'payment', never
+  // counted as spending, or it would count twice).
+  async (db) => {
+    await db.execAsync(`
+      CREATE TABLE shop_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        category_id INTEGER NOT NULL REFERENCES categories (id) ON DELETE RESTRICT,
+        -- The amount filled in for the next tea: the last one you added.
+        usual_amount_paise INTEGER CHECK (usual_amount_paise IS NULL OR usual_amount_paise > 0),
+        -- Already due when you started using the app (from your diary).
+        opening_due_paise INTEGER NOT NULL DEFAULT 0 CHECK (opening_due_paise >= 0),
+        created_at INTEGER NOT NULL
+      );
+
+      ALTER TABLE transactions ADD COLUMN shop_account_id INTEGER REFERENCES shop_accounts (id) ON DELETE SET NULL;
+      ALTER TABLE transactions ADD COLUMN shop_entry TEXT
+        CHECK (shop_entry IS NULL OR shop_entry IN ('purchase', 'payment'));
+      CREATE INDEX idx_transactions_shop_account ON transactions (shop_account_id);
+
+      -- A bank name you paid a shop account from, so the next SMS is suggested as that payment.
+      ALTER TABLE name_memory ADD COLUMN shop_account_id INTEGER REFERENCES shop_accounts (id) ON DELETE SET NULL;
+    `);
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length;

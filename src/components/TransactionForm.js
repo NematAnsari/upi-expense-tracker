@@ -19,6 +19,7 @@ import {
   buildTemplateName,
   categoryIdForSave,
   pickableCategories,
+  pickableCategoryId,
 } from '../domain/transactionForm';
 import { validateTemplateForm, validateTransactionForm } from '../domain/validation';
 import { useAsyncValue } from '../hooks/useAsyncValue';
@@ -79,6 +80,9 @@ const TITLES = {
 
 /** "Add Expense", "Edit Money Given"... mode: 'add' or 'edit'. */
 function titleFor(form, mode) {
+  if (form.shopEntry === 'payment') {
+    return mode === 'edit' ? 'Edit Shop Payment' : 'Shop Payment';
+  }
   const key = form.loanType ?? (form.direction === 'credit' ? 'received' : 'paid');
   return (TITLES[key] ?? TITLES.paid)[mode];
 }
@@ -200,7 +204,9 @@ export function TransactionForm({
   const [accountList, setAccountList] = useState(accounts);
   const [templateList, setTemplateList] = useState(templates ?? []);
   // Decided once, from the entry the form starts with.
-  const [pair] = useState(() => pairFor(initialValues.loanType ?? null));
+  // A payment to a shop account keeps its type: it only lowers what is due there.
+  const shopPayment = initialValues.shopEntry === 'payment';
+  const [pair] = useState(() => (shopPayment ? null : pairFor(initialValues.loanType ?? null)));
   // A ref updates instantly, unlike state, so a fast double tap cannot save twice.
   const savingRef = useRef(false);
   const templatesEnabled = templates != null;
@@ -250,9 +256,11 @@ export function TransactionForm({
   // Picking a remembered merchant or purpose also fills an empty category.
   function pickSuggestion(field, suggestion) {
     const changes = { [field]: suggestion.value };
-    const knownCategory = categoryList.some((category) => category.id === suggestion.categoryId);
-    if (form.categoryId == null && knownCategory) {
-      changes.categoryId = suggestion.categoryId;
+    // Only a category you can pick by hand: a name last used for money given or
+    // taken would otherwise bring in the hidden "Loans" category.
+    const suggestedCategoryId = pickableCategoryId(categoryList, suggestion.categoryId);
+    if (form.categoryId == null && suggestedCategoryId != null) {
+      changes.categoryId = suggestedCategoryId;
     }
     updateFields(changes);
   }
@@ -411,10 +419,13 @@ export function TransactionForm({
           {pair && activity ? (
             <SegmentedControl options={pair} value={activity.key} onChange={changeActivity} />
           ) : (
-            <Text style={styles.fixedType}>{loan?.choice}</Text>
+            <Text style={styles.fixedType}>{shopPayment ? `Payment to ${form.shopName}` : loan?.choice}</Text>
           )}
           {errors.loanType ? <Text style={styles.error}>{errors.loanType}</Text> : null}
           {loan ? <Text style={styles.hint}>{loan.note}</Text> : null}
+          {shopPayment ? (
+            <Text style={styles.hint}>Lowers what is due at this shop. Not counted as spending again.</Text>
+          ) : null}
         </View>
 
         {splitting ? (
@@ -427,7 +438,7 @@ export function TransactionForm({
         ) : null}
 
         {/* Money given and taken is saved under "Loans", so there is no category to choose. */}
-        {loan ? null : (
+        {loan || shopPayment ? null : (
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>
               Category<Text style={styles.required}> *</Text>

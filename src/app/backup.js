@@ -96,7 +96,7 @@ export default function BackupScreen() {
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Card title="Save a backup">
         <Text style={styles.text}>
-          {`Saves all ${plural(data.entries, 'entry', 'entries')}, categories, bank accounts, templates and remembered names to one file. Keep it off the phone: Google Drive, WhatsApp to yourself, or email.`}
+          {`Saves all ${plural(data.entries, 'entry', 'entries')}, categories, bank accounts, shop accounts, templates and remembered names to one file. Keep it off the phone: Google Drive, WhatsApp to yourself, or email.`}
         </Text>
         <Text style={styles.muted}>
           {data.lastBackupAt

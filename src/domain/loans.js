@@ -213,6 +213,25 @@ function byTime(a, b) {
 }
 
 /**
+ * Goes through one person's entries [{ id, loanType, amountPaise, occurredAt }]
+ * in time order and finds the first money received back or returned that is
+ * more than there was to receive or return at that moment, which would put
+ * the person on the wrong side. Returns { entry, availablePaise } or null when
+ * everything is consistent.
+ */
+export function findReturnProblem(entries) {
+  let net = 0;
+  for (const entry of [...entries].sort(byTime)) {
+    const availablePaise = maxReturnPaise(entry.loanType, net);
+    if (availablePaise !== null && entry.amountPaise > availablePaise) {
+      return { entry, availablePaise };
+    }
+    net += NET_SIGN[entry.loanType] * entry.amountPaise;
+  }
+  return null;
+}
+
+/**
  * The dates behind a person's remaining amount, from their entries
  * [{ id, loanType, amountPaise, occurredAt }] in any order:
  *   openSinceAt:  when the current open amount started (the entry that last

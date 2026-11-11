@@ -21,6 +21,11 @@ function optionalText(value) {
   return trimmed === '' ? null : trimmed;
 }
 
+/** A name with one space between words, so "Rahul  Kumar" and "Rahul Kumar" are the same person. */
+function nameText(value) {
+  return optionalText(String(value ?? '').replace(/\s+/g, ' '));
+}
+
 /**
  * Validates raw form values.
  * Returns { errors } (field -> message) and, when valid, clean `values`
@@ -50,7 +55,7 @@ export function validateTransactionForm(form, now = Date.now()) {
   const loanType = form.loanType ?? null;
   if (!isValidLoanType(loanType, direction)) {
     errors.loanType = 'Choose what this payment is.';
-  } else if (loanType && !optionalText(form.merchant)) {
+  } else if (loanType && !nameText(form.merchant)) {
     // Loans are tracked per person, so the name is needed.
     errors.merchant = "Enter the person's name.";
   }
@@ -84,7 +89,7 @@ export function validateTransactionForm(form, now = Date.now()) {
       categoryId: form.categoryId,
       occurredAt: form.occurredAt,
       paymentMethod: form.paymentMethod,
-      merchant: optionalText(form.merchant),
+      merchant: nameText(form.merchant),
       reference: optionalText(form.reference),
       notes: optionalText(form.notes),
     },
@@ -120,7 +125,7 @@ export function validateTemplateForm(form) {
       amountPaise,
       categoryId: form.categoryId,
       purpose: optionalText(form.purpose),
-      merchant: optionalText(form.merchant),
+      merchant: nameText(form.merchant),
       paymentMethod: PAYMENT_METHODS.includes(form.paymentMethod) ? form.paymentMethod : PAYMENT_METHODS[0],
     },
   };

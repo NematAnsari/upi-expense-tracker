@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, fontSize, spacing } from '../constants/theme';
+import { paymentText } from '../domain/shopAccount';
 import { formatDateTime, formatShortDate, formatTime } from '../utils/dates';
 import { formatINR } from '../utils/money';
 import { Amount } from './Amount';
@@ -15,10 +16,10 @@ import { CategoryIcon } from './CategoryIcon';
  * last line shows how it was paid ("Cash", "UPI · BOI ••2222").
  */
 export function TransactionRow({ transaction, onPress, onLongPress }) {
-  const { amountPaise, direction, purpose, merchant, categoryName, occurredAt, paymentMethod, accountName } =
-    transaction;
-  const title = merchant || purpose || categoryName;
-  const payment = [paymentMethod, accountName].filter(Boolean).join(' · ');
+  const { amountPaise, direction, purpose, merchant, categoryName, occurredAt } = transaction;
+  // A payment to a shop account says so, so it is not mistaken for one more tea.
+  const title = transaction.shopEntry === 'payment' ? `Payment to ${merchant}` : merchant || purpose || categoryName;
+  const payment = paymentText(transaction);
   const last = merchant && purpose ? purpose : payment;
 
   return (

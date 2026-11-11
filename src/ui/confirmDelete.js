@@ -20,3 +20,25 @@ export function confirmDeleteTransaction(transaction) {
     );
   });
 }
+
+/**
+ * Asks before deleting one part of a split payment: only this one, or all
+ * parts (your share and what was paid for others). Resolves 'one', 'all' or
+ * null when cancelled. parts: from listSplitParts.
+ */
+export function confirmDeleteSplitPart(transaction, parts) {
+  const title = activityTitle(transaction);
+  const totalPaise = parts.reduce((sum, part) => sum + part.amountPaise, 0);
+  return new Promise((resolve) => {
+    Alert.alert(
+      'Delete part of a split payment?',
+      `${title} · ${formatINR(transaction.amountPaise)}\nThis is one of ${parts.length} parts of a split payment (${formatINR(totalPaise)} in all).\n\nThis cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
+        { text: 'Only this one', onPress: () => resolve('one') },
+        { text: `All ${parts.length} parts`, style: 'destructive', onPress: () => resolve('all') },
+      ],
+      { cancelable: true, onDismiss: () => resolve(null) },
+    );
+  });
+}

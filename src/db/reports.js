@@ -3,12 +3,13 @@
 // Loans (money lent, borrowed or paid back) are neither spending nor income,
 // so they are left out of both; see getLoanBalances for them.
 
-import { currentDueAt, describeBalance, maxReturnPaise, settlementDates } from '../domain/loans.js';
+import { currentDueAt, describeBalance, findReturnProblem, maxReturnPaise, settlementDates } from '../domain/loans.js';
 import { getDayRange, getMonthRange, getWeekBuckets, shiftMonth } from '../utils/dates.js';
 import { averagePaise, formatINR, percentOf } from '../utils/money.js';
-import { SELECT_TRANSACTION, listTransactions } from './transactions.js';
+import { NOT_SHOP_PAYMENT, SELECT_TRANSACTION, listTransactions } from './transactions.js';
 
-const IN_RANGE = "t.direction = 'debit' AND t.loan_type IS NULL AND t.occurred_at >= ? AND t.occurred_at < ?";
+// Spending: money paid that is not money given or taken, and not a payment to a shop account.
+const IN_RANGE = `t.direction = 'debit' AND t.loan_type IS NULL AND ${NOT_SHOP_PAYMENT} AND t.occurred_at >= ? AND t.occurred_at < ?`;
 
 export async function getSpendingTotals(db, startMs, endMs) {
   const row = await db.getFirstAsync(
@@ -62,7 +63,7 @@ async function getWeeklyTotals(db, monthKey) {
 
 async function countMissingPurpose(db, startMs, endMs) {
   const row = await db.getFirstAsync(
-    `SELECT COUNT(*) AS count FROM transactions t WHERE ${IN_RANGE} AND t.purpose IS NULL`,
+    `SELECT COUNT(*) AS count FROM transactions t WHERE ${IN_RANGE} AND t.purpose IS NULL AND t.shop_entry IS NULL`,
     [startMs, endMs],
   );
   return row?.count ?? 0;
@@ -121,6 +122,64 @@ export async function checkReturnAmount(db, values, excludeId = null) {
       : `You have no money to return to ${values.merchant}.`;
   }
   return `Remaining amount is ${formatINR(maxPaise)}. Enter ${formatINR(maxPaise)} or less.`;
+}
+
+/**
+ * Editing or deleting money given or taken (or money received back or
+ * returned) must not leave a person on the wrong side: money received back or
+ * returned can never be more than there was to receive or return when it
+ * happened (see findReturnProblem). Example: Amit gave back all ₹1,000, so the
+ * ₹1,000 you gave him cannot be lowered to ₹500 or deleted.
+ *
+ * removeIds: entries about to be deleted.
+ * edit: { id, values } for an entry about to change (values from validateTransactionForm).
+ * Only a change that newly breaks a person is refused. A person who was
+ * already inconsistent before (for example from an entry dated in the past)
+ * can still be edited. Returns an error message, or null when it is fine.
+ */
+export async function checkLoanChange(db, { removeIds = [], edit = null }) {
+  const ids = [...removeIds, ...(edit ? [edit.id] : [])];
+  const keys = new Set();
+  if (ids.length > 0) {
+    const rows = await db.getAllAsync(
+      `SELECT DISTINCT lower(trim(merchant)) AS key FROM transactions
+       WHERE loan_type IS NOT NULL AND merchant IS NOT NULL AND id IN (${ids.map(() => '?').join(', ')})`,
+      ids,
+    );
+    rows.forEach((row) => keys.add(row.key));
+  }
+  // The same name matching SQL uses everywhere else (lower and trim).
+  let newKey = null;
+  if (edit?.values?.loanType && edit.values.merchant) {
+    newKey = (await db.getFirstAsync('SELECT lower(trim(?)) AS key', [edit.values.merchant])).key;
+    keys.add(newKey);
+  }
+
+  for (const key of keys) {
+    const entries = await db.getAllAsync(
+      `SELECT id, merchant, loan_type AS loanType, amount_paise AS amountPaise, occurred_at AS occurredAt
+       FROM transactions WHERE loan_type IS NOT NULL AND lower(trim(merchant)) = ?`,
+      [key],
+    );
+    const after = entries.filter((entry) => !removeIds.includes(entry.id) && entry.id !== edit?.id);
+    if (key === newKey) {
+      after.push({
+        id: edit.id,
+        loanType: edit.values.loanType,
+        amountPaise: edit.values.amountPaise,
+        occurredAt: edit.values.occurredAt,
+      });
+    }
+    const problem = findReturnProblem(after);
+    if (!problem || findReturnProblem(entries)) {
+      continue;
+    }
+    const name = (key === newKey ? edit.values.merchant : entries[0]?.merchant)?.trim() ?? 'this person';
+    return problem.entry.loanType === 'lent_repaid'
+      ? `Money received back from ${name} would be more than they had to return to you. Change or delete the money received back first.`
+      : `Money returned to ${name} would be more than you had to return to them. Change or delete the money returned first.`;
+  }
+  return null;
 }
 
 /**

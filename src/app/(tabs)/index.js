@@ -1,5 +1,6 @@
 // Expenses tab, laid out like Given & Taken: two tiles (Spent, Received) with
-// a + to add, a to-do card (payments to review, expenses missing a purpose), then this month's expenses and
+// a + to add, a to-do card (payments to review, expenses missing a purpose),
+// a card per shop account (tea taken now, paid later), then this month's expenses and
 // income with All / Paid / Received tabs, search and Filters (a sheet with sort
 // order, category, payment method and bank account icons).
 // Swipe a row right to edit or left to delete. History has every month.
@@ -17,6 +18,7 @@ import { MonthSelector } from '../../components/MonthSelector';
 import { SegmentedControl } from '../../components/SegmentedControl';
 import { EmptyState, ErrorState, LoadingState } from '../../components/States';
 import { RepeatGroupRow } from '../../components/RepeatGroupRow';
+import { ShopAccountStrip } from '../../components/ShopAccount';
 import { TextField } from '../../components/TextField';
 import { TextLink } from '../../components/TextLink';
 import { TodoCard } from '../../components/TodoCard';
@@ -26,6 +28,7 @@ import { listAccounts } from '../../db/accounts';
 import { listCategories } from '../../db/categories';
 import { countPendingDetected } from '../../db/detected';
 import { getDashboardData } from '../../db/reports';
+import { listShopAccounts } from '../../db/shopAccounts';
 import { listTransactions } from '../../db/transactions';
 import { groupRepeats } from '../../domain/repeats';
 import { pickableCategories } from '../../domain/transactionForm';
@@ -74,15 +77,23 @@ export default function ExpensesScreen() {
     // Pick up payments captured while the app was closed before reading totals.
     await syncDetectedPayments(db);
     const month = getMonthRange(monthKey);
-    const [dashboard, pendingCount, entries, categories, accounts] = await Promise.all([
+    const [dashboard, pendingCount, entries, categories, accounts, shopAccounts] = await Promise.all([
       getDashboardData(db, monthKey),
       countPendingDetected(db),
       // Expenses and income only (newest first); money given and taken has its own tab.
       listTransactions(db, { startMs: month.startMs, endMs: month.endMs, kind: 'regular' }),
       listCategories(db),
       listAccounts(db),
+      listShopAccounts(db),
     ]);
-    return { ...dashboard, pendingCount, entries, categories: pickableCategories(categories), accounts };
+    return {
+      ...dashboard,
+      pendingCount,
+      entries,
+      categories: pickableCategories(categories),
+      accounts,
+      shopAccounts,
+    };
   }, [db, monthKey]);
   const { data, error, reload } = useFocusQuery(loader);
   const deleteWithConfirm = useDeleteTransaction(reload);
@@ -245,11 +256,22 @@ export default function ExpensesScreen() {
             ].filter(Boolean)}
           />
 
+          {/* Shops where you take now and pay later (More → Shop accounts). */}
+          {data.shopAccounts.map((account) => (
+            <ShopAccountStrip
+              key={account.id}
+              account={account}
+              onChanged={reload}
+              onOpenStatement={() => router.push({ pathname: '/shop/[id]', params: { id: account.id } })}
+            />
+          ))}
+
           {(data.entries ?? []).length > 0 ? (
             <>
               <SegmentedControl options={options} value={list} onChange={setList} />
               <View style={styles.searchLine}>
-                {entries.length >= SEARCH_FROM ? (
+                {/* Stays while it has text, so a search you typed can always be seen and cleared. */}
+                {entries.length >= SEARCH_FROM || search.trim() ? (
                   <TextField
                     value={search}
                     onChangeText={setSearch}

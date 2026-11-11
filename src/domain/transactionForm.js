@@ -49,6 +49,15 @@ export function pickableCategories(categories) {
   return categories.filter((category) => category.name.toLowerCase() !== LOANS_CATEGORY.toLowerCase());
 }
 
+/**
+ * A remembered category (from a past entry or a suggestion), but only if you
+ * can pick it by hand. "Loans" is not offered, so it must never be suggested
+ * for an expense. Returns the id, or null.
+ */
+export function pickableCategoryId(categories, categoryId) {
+  return pickableCategories(categories).some((category) => category.id === categoryId) ? categoryId : null;
+}
+
 /** For a loan the category is always "Loans"; otherwise the chosen one is kept. */
 export function categoryIdForSave(form, categories) {
   if (!form.loanType) {
