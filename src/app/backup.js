@@ -4,14 +4,14 @@
 
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { ErrorState, LoadingState } from '../components/States';
 import { colors, fontSize, spacing } from '../constants/theme';
 import { checkBackup, countEntries, getLastBackupAt, restoreBackup } from '../db/backup';
 import { useFocusQuery } from '../hooks/useFocusQuery';
-import { pickBackup, shareBackup } from '../services/backupFile';
+import { clearSafetyCopy, pickBackup, readSafetyCopy, saveSafetyCopy, shareBackup } from '../services/backupFile';
 import { showMessage } from '../ui/notify';
 import { formatOrdinalDate, formatTime } from '../utils/dates';
 
@@ -22,7 +22,12 @@ export default function BackupScreen() {
   const [busy, setBusy] = useState(false);
 
   const loader = useCallback(
-    async () => ({ entries: await countEntries(db), lastBackupAt: await getLastBackupAt(db) }),
+    async () => ({
+      entries: await countEntries(db),
+      lastBackupAt: await getLastBackupAt(db),
+      // What was on the phone before the last restore, if a restore was done.
+      safetyCopy: await readSafetyCopy(),
+    }),
     [db],
   );
   const { data, error, reload } = useFocusQuery(loader);
@@ -41,10 +46,18 @@ export default function BackupScreen() {
     }
   }
 
-  async function restore(backup) {
+  // undo: bringing back the copy saved before the last restore (it is then used up).
+  async function restore(backup, undo = false) {
     setBusy(true);
     try {
+      if (!undo) {
+        // Keep what is here now, so a restore from the wrong file can be undone.
+        await saveSafetyCopy(db);
+      }
       const summary = await restoreBackup(db, backup);
+      if (undo) {
+        clearSafetyCopy();
+      }
       showMessage(`Restored ${plural(summary.entries, 'entry', 'entries')}`);
     } catch (restoreError) {
       console.error(restoreError);
@@ -77,10 +90,27 @@ export default function BackupScreen() {
       'Replace all data?',
       `The backup${from} has ${plural(checked.summary.entries, 'entry', 'entries')}. ` +
         `This phone has ${plural(data.entries, 'entry', 'entries')} now, and they will be replaced. ` +
-        'Payments waiting for review are cleared too. This cannot be undone.',
+        'Payments waiting for review are cleared too. A copy of what is here now is kept, so you can undo this restore from this screen.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Replace', style: 'destructive', onPress: () => restore(backup) },
+      ],
+    );
+  }
+
+  function handleUndoRestore() {
+    const copy = data.safetyCopy;
+    const checked = checkBackup(copy);
+    if (checked.error) {
+      Alert.alert('Cannot undo the restore', checked.error);
+      return;
+    }
+    Alert.alert(
+      'Undo the last restore?',
+      `This brings back the ${plural(checked.summary.entries, 'entry', 'entries')} that were on this phone before the restore, and replaces what is here now.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Undo restore', style: 'destructive', onPress: () => restore(copy, true) },
       ],
     );
   }
@@ -100,7 +130,7 @@ export default function BackupScreen() {
         </Text>
         <Text style={styles.muted}>
           {data.lastBackupAt
-            ? `Last backup: ${formatOrdinalDate(data.lastBackupAt)}, ${formatTime(data.lastBackupAt)}`
+            ? `Last backup file made: ${formatOrdinalDate(data.lastBackupAt)}, ${formatTime(data.lastBackupAt)}. It only protects you if you saved it somewhere off the phone.`
             : 'No backup saved yet.'}
         </Text>
         <Button label="Save backup file" onPress={handleSave} loading={busy} />
@@ -112,6 +142,14 @@ export default function BackupScreen() {
           by what is in the file.
         </Text>
         <Button label="Choose backup file" variant="secondary" onPress={handleRestore} disabled={busy} />
+        {data.safetyCopy ? (
+          <View style={styles.undo}>
+            <Text style={styles.muted}>
+              {`A copy from before your last restore is kept on this phone (${plural(data.safetyCopy.tables?.transactions?.length ?? 0, 'entry', 'entries')}).`}
+            </Text>
+            <Button label="Undo last restore" variant="secondary" onPress={handleUndoRestore} disabled={busy} />
+          </View>
+        ) : null}
       </Card>
 
       <Text style={styles.muted}>
@@ -125,5 +163,6 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.lg },
   text: { fontSize: fontSize.md, color: colors.text, marginBottom: spacing.md },
+  undo: { marginTop: spacing.lg },
   muted: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: spacing.md },
 });

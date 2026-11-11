@@ -162,6 +162,7 @@ export default function NewTransactionScreen() {
       lockPerson={lockPerson}
       amountHint={lockPerson && Number(amountPaise) > 0 ? `Remaining amount: ${formatINR(Number(amountPaise))}` : null}
       checkBeforeSave={checkBeforeSave}
+      lockType={Boolean(detectedId)}
       allowSplit
     />
   );

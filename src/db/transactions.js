@@ -241,6 +241,27 @@ export async function listSplitParts(db, splitGroup) {
 }
 
 /**
+ * A split is one payment, so what its parts share follows an edit of one
+ * part: the date and time, how it was paid, the bank account and the UPI
+ * reference. Amounts, names and categories stay each part's own.
+ */
+export async function updateSplitShared(db, splitGroup, exceptId, values) {
+  await db.runAsync(
+    `UPDATE transactions SET occurred_at = ?, payment_method = ?, account_id = ?, reference = ?, updated_at = ?
+     WHERE split_group = ? AND id <> ?`,
+    [
+      values.occurredAt,
+      values.paymentMethod,
+      values.accountId ?? null,
+      values.reference,
+      Date.now(),
+      splitGroup,
+      exceptId,
+    ],
+  );
+}
+
+/**
  * Deletes entries together. A payment that came from a bank SMS goes back to
  * Review (waiting) instead of staying marked as added, so it can be reviewed
  * again and is not mistaken for a duplicate of something that no longer exists.

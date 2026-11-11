@@ -156,3 +156,87 @@ export async function checkShopPayment(db, accountId, amountPaise, excludeId = n
     ? `Nothing is due at ${account.name}.`
     : `Due at ${account.name} is ${formatINR(due)}. Enter ${formatINR(due)} or less.`;
 }
+
+/**
+ * Deleting or lowering something taken must not leave more paid than taken at
+ * a shop (the amount due would go below zero). Example: ₹500 of tea, all
+ * paid; one ₹40 tea cannot be deleted until the payment is changed.
+ * removeIds: entries about to be deleted. edit: { id, values } for an entry
+ * whose amount is about to change. Only a change that newly breaks the
+ * account is refused. Returns an error message, or null when it is fine.
+ */
+export async function checkShopChange(db, { removeIds = [], edit = null }) {
+  const ids = [...removeIds, ...(edit ? [edit.id] : [])];
+  if (ids.length === 0) {
+    return null;
+  }
+  const rows = await db.getAllAsync(
+    `SELECT id, shop_account_id AS shopAccountId, shop_entry AS shopEntry, amount_paise AS amountPaise
+     FROM transactions WHERE shop_account_id IS NOT NULL AND id IN (${ids.map(() => '?').join(', ')})`,
+    ids,
+  );
+  // How much each account's due amount would move.
+  const changes = {};
+  for (const row of rows) {
+    const sign = row.shopEntry === 'payment' ? -1 : 1;
+    const newAmount = removeIds.includes(row.id) ? 0 : edit.values.amountPaise;
+    changes[row.shopAccountId] = (changes[row.shopAccountId] ?? 0) + sign * (newAmount - row.amountPaise);
+  }
+  for (const [accountId, change] of Object.entries(changes)) {
+    const account = await getShopAccount(db, Number(accountId));
+    if (account && account.duePaise >= 0 && account.duePaise + change < 0) {
+      return `${account.name} would have more paid than taken. Change or delete the payment first.`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Changes an account's name, usual amount or the amount that was already due.
+ * A new name is also written on its entries and on names remembered from
+ * bank SMS, so lists and the next SMS show it. The already-due amount cannot
+ * be lowered so far that more was paid than is due.
+ */
+export async function updateShopAccount(db, id, { name, usualAmountPaise = null, openingDuePaise = 0 }) {
+  const account = await getShopAccount(db, id);
+  if (!account) {
+    throw new Error('This shop account no longer exists.');
+  }
+  const clean = String(name ?? '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  if (!clean) {
+    throw new Error('Enter the shop name.');
+  }
+  const taken = await db.getFirstAsync('SELECT id FROM shop_accounts WHERE name = ? AND id <> ?', [clean, id]);
+  if (taken) {
+    throw new Error(`${clean} already has an account.`);
+  }
+  const dueAfter = account.duePaise - account.openingDuePaise + openingDuePaise;
+  if (dueAfter < 0) {
+    throw new Error(
+      `Already due cannot be less than ${formatINR(openingDuePaise - dueAfter)}: that much is already paid.`,
+    );
+  }
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
+      'UPDATE shop_accounts SET name = ?, usual_amount_paise = ?, opening_due_paise = ? WHERE id = ?',
+      [clean, usualAmountPaise, openingDuePaise, id],
+    );
+    await txn.runAsync('UPDATE transactions SET merchant = ?, updated_at = ? WHERE shop_account_id = ?', [
+      clean,
+      Date.now(),
+      id,
+    ]);
+    await txn.runAsync('UPDATE name_memory SET merchant = ? WHERE shop_account_id = ?', [clean, id]);
+  });
+}
+
+/** Removes an account that has no entries. One with entries is kept: delete those first. */
+export async function deleteShopAccount(db, id) {
+  const row = await db.getFirstAsync('SELECT COUNT(*) AS count FROM transactions WHERE shop_account_id = ?', [id]);
+  if ((row?.count ?? 0) > 0) {
+    throw new Error('This account has entries. Delete them from the statement first.');
+  }
+  await db.runAsync('DELETE FROM shop_accounts WHERE id = ?', [id]);
+}

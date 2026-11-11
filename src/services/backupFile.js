@@ -44,3 +44,40 @@ export async function pickBackup() {
     throw new Error('This file is not a backup from this app.');
   }
 }
+
+// Kept inside the app's own storage (not the cache, which Android may clear).
+const safetyFile = () => new File(Paths.document, 'before-restore.json');
+
+/**
+ * Saves what is on the phone right now, just before a restore replaces it,
+ * so a restore from the wrong file can be undone. Only the latest one is kept.
+ */
+export async function saveSafetyCopy(db) {
+  const file = safetyFile();
+  if (file.exists) {
+    file.delete();
+  }
+  file.create();
+  file.write(JSON.stringify(await buildBackup(db)));
+}
+
+/** The copy saved before the last restore, or null when there is none (or it cannot be read). */
+export async function readSafetyCopy() {
+  const file = safetyFile();
+  if (!file.exists) {
+    return null;
+  }
+  try {
+    return JSON.parse(await file.text());
+  } catch {
+    return null;
+  }
+}
+
+/** Removes the safety copy once it was used. */
+export function clearSafetyCopy() {
+  const file = safetyFile();
+  if (file.exists) {
+    file.delete();
+  }
+}

@@ -1,7 +1,9 @@
+import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { colors, fontSize, radius, spacing } from '../constants/theme';
+import { formatShortDate, withDateFrom } from '../utils/dates';
 import { parseAmountToPaise } from '../utils/money';
 import { Button } from './Button';
 import { SegmentedControl } from './SegmentedControl';
@@ -16,8 +18,9 @@ const METHODS = [
  *   Add tea · XYZ Tea                      (title)
  *   ₹ 40                                   (filled in, ready to change)
  *   [ UPI | Cash ]                         (only with withMethod, for paying)
+ *   Date                          [ Today ] (only with withDate: an earlier day can be picked)
  *   [ Cancel ]  [ Add ]
- * onSubmit(amountPaise, method) saves; it returns an error message to show
+ * onSubmit(amountPaise, method, occurredAt) saves; it returns an error message to show
  * (and keeps the sheet open), or null. Open it with a new `key` each time so
  * it starts fresh.
  */
@@ -27,14 +30,33 @@ export function AmountSheet({
   note,
   initialAmountText = '',
   withMethod = false,
+  withDate = false,
   submitLabel,
   onSubmit,
   onClose,
 }) {
   const [amountText, setAmountText] = useState(initialAmountText);
   const [method, setMethod] = useState('UPI');
+  // The day picked, or null for today (the time is always the moment you save).
+  const [pickedDay, setPickedDay] = useState(null);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+
+  function pickDay() {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+    DateTimePickerAndroid.open({
+      value: pickedDay ?? new Date(),
+      mode: 'date',
+      maximumDate: new Date(),
+      onChange: (event, picked) => {
+        if (event.type === 'set' && picked) {
+          setPickedDay(picked);
+        }
+      },
+    });
+  }
 
   async function submit() {
     const amount = parseAmountToPaise(amountText);
@@ -44,7 +66,9 @@ export function AmountSheet({
     }
     setSaving(true);
     try {
-      const message = await onSubmit(amount.paise, method);
+      const now = new Date();
+      const occurredAt = (pickedDay ? withDateFrom(now, pickedDay) : now).getTime();
+      const message = await onSubmit(amount.paise, method, occurredAt);
       if (message) {
         setError(message);
         setSaving(false);
@@ -88,6 +112,20 @@ export function AmountSheet({
               </Text>
             ) : null}
             {withMethod ? <SegmentedControl options={METHODS} value={method} onChange={setMethod} /> : null}
+            {withDate ? (
+              <View style={styles.dateLine}>
+                <Text style={styles.dateLabel}>Date</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Date: ${pickedDay ? formatShortDate(pickedDay.getTime()) : 'Today'}. Change date`}
+                  onPress={pickDay}
+                  hitSlop={6}
+                  style={({ pressed }) => [styles.datePill, pressed && styles.pressed]}
+                >
+                  <Text style={styles.dateText}>{pickedDay ? formatShortDate(pickedDay.getTime()) : 'Today'}</Text>
+                </Pressable>
+              </View>
+            ) : null}
             {note ? <Text style={styles.note}>{note}</Text> : null}
             <View style={styles.buttons}>
               <Button label="Cancel" variant="secondary" onPress={onClose} style={styles.flex} />
@@ -117,5 +155,15 @@ const styles = StyleSheet.create({
   amount: { fontSize: 40, fontWeight: '700', minWidth: 80, textAlign: 'center', color: colors.expense },
   error: { fontSize: fontSize.sm, color: colors.danger, textAlign: 'center' },
   note: { fontSize: fontSize.sm, color: colors.textMuted },
+  pressed: { opacity: 0.6 },
+  dateLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dateLabel: { fontSize: fontSize.md, color: colors.text },
+  datePill: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.pill,
+    backgroundColor: colors.background,
+  },
+  dateText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.text },
   buttons: { flexDirection: 'row', gap: spacing.md },
 });

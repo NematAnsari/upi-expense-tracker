@@ -184,6 +184,19 @@ export const MIGRATIONS = [
       ALTER TABLE name_memory ADD COLUMN shop_account_id INTEGER REFERENCES shop_accounts (id) ON DELETE SET NULL;
     `);
   },
+
+  // Version 7: names saved with extra spaces inside ("Rahul  Kumar") become
+  // single-spaced, so one person no longer shows as two. New names are
+  // cleaned when saved (see validation.js); this fixes the old ones.
+  // SQLite has no pattern replace, so two spaces become one a few times over.
+  async (db) => {
+    const collapse = (column) =>
+      `trim(replace(replace(replace(replace(${column}, '  ', ' '), '  ', ' '), '  ', ' '), '  ', ' '))`;
+    await db.execAsync(`
+      UPDATE transactions SET merchant = ${collapse('merchant')} WHERE merchant LIKE '%  %';
+      UPDATE name_memory SET merchant = ${collapse('merchant')} WHERE merchant LIKE '%  %';
+    `);
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length;

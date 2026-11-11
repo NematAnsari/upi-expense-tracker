@@ -177,6 +177,8 @@ function DueDateInput({ value, minimumMs, onChange }) {
  * lockPerson: the name cannot be changed (opened from a person's page).
  * knownPeople: names already used for money given and taken, to ask "Same person as ...?".
  * mode: 'add' or 'edit', for the screen title ("Add Expense", "Edit Money Given"...).
+ * lockType: the type is shown as text and cannot be switched (a bank SMS says
+ * whether money was paid or received, so Review details must not turn it around).
  * allowSplit: offer "Split with someone" on an expense (Add only). Then
  * onSubmit(values, split) gets split = { parts, loansCategoryId } (or null):
  * values.amountPaise is your share, parts are the others' shares.
@@ -195,6 +197,7 @@ export function TransactionForm({
   knownPeople = [],
   mode = 'add',
   allowSplit = false,
+  lockType = false,
 }) {
   const db = useSQLiteContext();
   const [form, setForm] = useState(initialValues);
@@ -206,7 +209,7 @@ export function TransactionForm({
   // Decided once, from the entry the form starts with.
   // A payment to a shop account keeps its type: it only lowers what is due there.
   const shopPayment = initialValues.shopEntry === 'payment';
-  const [pair] = useState(() => (shopPayment ? null : pairFor(initialValues.loanType ?? null)));
+  const [pair] = useState(() => (shopPayment || lockType ? null : pairFor(initialValues.loanType ?? null)));
   // A ref updates instantly, unlike state, so a fast double tap cannot save twice.
   const savingRef = useRef(false);
   const templatesEnabled = templates != null;
@@ -419,7 +422,9 @@ export function TransactionForm({
           {pair && activity ? (
             <SegmentedControl options={pair} value={activity.key} onChange={changeActivity} />
           ) : (
-            <Text style={styles.fixedType}>{shopPayment ? `Payment to ${form.shopName}` : loan?.choice}</Text>
+            <Text style={styles.fixedType}>
+              {shopPayment ? `Payment to ${form.shopName}` : (loan?.choice ?? (received ? 'Received' : 'Paid'))}
+            </Text>
           )}
           {errors.loanType ? <Text style={styles.error}>{errors.loanType}</Text> : null}
           {loan ? <Text style={styles.hint}>{loan.note}</Text> : null}

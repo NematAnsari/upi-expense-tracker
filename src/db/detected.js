@@ -373,6 +373,7 @@ function isValidRemembered(loanType, direction) {
 /**
  * Undo an Add: deletes the saved transaction and puts the item back in the
  * review list. Only works while the transaction still came from this item.
+ * An entry you changed after adding it is kept: Undo must not throw away an edit.
  */
 export async function undoAddDetected(db, detectedId) {
   await db.withExclusiveTransactionAsync(async (txn) => {
@@ -384,6 +385,15 @@ export async function undoAddDetected(db, detectedId) {
       throw new Error('This payment can no longer be undone.');
     }
     if (row.transactionId != null) {
+      const edited = await txn.getFirstAsync(
+        'SELECT id FROM transactions WHERE (id = ? OR split_group = ?) AND updated_at <> created_at LIMIT 1',
+        [row.transactionId, row.transactionId],
+      );
+      if (edited) {
+        throw new Error(
+          'You changed this entry after adding it, so it was kept. Delete it from the list if you no longer want it.',
+        );
+      }
       // A split payment removes all its parts.
       await txn.runAsync("DELETE FROM transactions WHERE (id = ? OR split_group = ?) AND source = 'notification'", [
         row.transactionId,
@@ -412,6 +422,12 @@ export async function addDetectedBatch(db, entries) {
     }
   }
   return { addedIds, error: null };
+}
+
+/** When the newest bank message or payment notification was captured (ms), or null if none ever was. */
+export async function getLastDetectedAt(db) {
+  const row = await db.getFirstAsync('SELECT MAX(posted_at) AS lastAt FROM detected_payments');
+  return row?.lastAt ?? null;
 }
 
 /** Recent captures of every status, for the Payment Detection screen. */

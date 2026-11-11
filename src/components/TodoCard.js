@@ -3,8 +3,8 @@ import Svg, { Path } from 'react-native-svg';
 import { colors, fontSize, radius, spacing } from '../constants/theme';
 import { CountPill } from './CountPill';
 
-// The Expenses tab's to-do card: payments waiting for review, and expenses
-// with no purpose yet.
+// The Expenses tab's to-do card: payments waiting for review, bank messages
+// that stopped coming, expenses with no purpose yet, and a backup that is due.
 
 const STROKE = { fill: 'none', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' };
 const DRAW = {
@@ -12,6 +12,10 @@ const DRAW = {
   review: (c) => <Path d="M4 6h16v12H4zM4 7l8 6 8-6" stroke={c} {...STROKE} />,
   // A pencil: something to fill in.
   purpose: (c) => <Path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4" stroke={c} {...STROKE} />,
+  // A bell: payment detection may have stopped.
+  detection: (c) => <Path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2h16l-2-2zM10 21h4" stroke={c} {...STROKE} />,
+  // A tray with a down arrow: save a backup.
+  backup: (c) => <Path d="M12 4v10M8 10l4 4 4-4M5 19h14" stroke={c} {...STROKE} />,
 };
 
 function Icon({ name, color, size = 16 }) {
@@ -27,7 +31,8 @@ function Icon({ name, color, size = 16 }) {
  * count, and the action on the right. Nothing shows when there is nothing to do.
  *   (✉) Payments to review (3)        Review ›
  *   (✎) Need a purpose (5)               Add ›
- * items: [{ key, icon: 'review' | 'purpose', title, count, action, message, onPress }].
+ * items: [{ key, icon: 'review' | 'detection' | 'purpose' | 'backup', title,
+ * count (optional), action, message, onPress }]. Review is teal; the rest amber.
  */
 export function TodoCard({ items }) {
   if (items.length === 0) {
@@ -50,7 +55,7 @@ export function TodoCard({ items }) {
             <Text style={styles.todoText} numberOfLines={1}>
               {item.title}
             </Text>
-            <CountPill count={item.count} />
+            {item.count != null ? <CountPill count={item.count} /> : null}
           </View>
           <Text style={styles.todoAction}>{`${item.action} ›`}</Text>
         </Pressable>

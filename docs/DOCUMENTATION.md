@@ -6,8 +6,8 @@ Everything about the app is defined here. When the app changes, this file change
 | | |
 | --- | --- |
 | Last updated | 2026-11-11 |
-| Database schema version | 6 |
-| Automated tests | 113, all passing |
+| Database schema version | 7 |
+| Automated tests | 118, all passing |
 | Platform | Android only |
 | Personal data | Not included here on purpose: no names, account numbers, project IDs or real messages |
 
@@ -81,7 +81,11 @@ From top to bottom:
 
 1. **Month selector** (see 4.12).
 2. **Two tiles, Spent and Received.** Each shows the month's total, a small grey count pill, and a **+** to add. In the current month the last line is "Today ₹x" with a pill for today's count, or "Nothing today". Past months leave that line blank.
-3. **To-do card** (only when something needs you): "Payments to review (N)" first, because those are not counted until added, then "Need a purpose (N)", which opens History filtered to expenses with no purpose.
+3. **To-do card** (only when something needs you), up to four lines in this order:
+   - "Payments to review (N)", first because those are not counted until added.
+   - "No bank SMS read for N days" (after 3 quiet days, only when payment detection is set up and has read something before): Android may have stopped the reader. Opens Payment detection.
+   - "Need a purpose (N)", which opens History filtered to expenses with no purpose.
+   - "No backup saved yet" or "Last backup N days ago" (after 7 days, only when there are entries). Opens Backup & restore.
 4. **Shop account strips**, one per shop account (see 4.8).
 5. **All / Paid / Received** switch with a count on each.
 6. **Search** (shown from 6 entries, or while it has text so it can always be cleared; matches name or purpose) and a **Filters** button. Filters is a bottom sheet: Sort by (Latest, Largest), Category, Paid by, Bank account. When filters are on, a line shows the entry count with Spent and Received.
@@ -99,6 +103,7 @@ Order on the form:
    - from Given & Taken or a person page: **I gave | I took**
    - editing or Review details: the pair that fits that entry
    - money received back or returned: fixed text, no choice
+   - Review details of a bank payment: fixed text too, because the bank message already says whether money was paid or received
    The screen title follows the choice ("Add Expense", "Money Given", "Edit Shop Payment"...).
 4. **Category**, a row of icons to scroll and tap, with **+ New**. Hidden for money given or taken (saved under the hidden "Loans" category) and for shop payments.
 5. **Details card:** name (Paid to whom? / Received from whom? / Person's name), What for? (Note for given or taken), and **Return by** for I gave or I took. Past names and purposes appear as suggestion chips; picking one can fill an empty category. For people, "Same person as Rahul Kumar?" appears when a similar name exists.
@@ -119,6 +124,7 @@ Validation (`src/domain/validation.js`):
 | Money received back or returned | Cannot be more than the remaining amount (`checkReturnAmount`) |
 | Editing or deleting money given or taken | Cannot leave money received back or returned larger than what there was to receive or return at that time (`checkLoanChange`). Example: ₹1,000 given and all paid back cannot be lowered to ₹500, deleted or turned into money taken. A person who was already inconsistent before (for example from an entry dated in the past) can still be edited |
 | Split | Your share must stay above ₹0 (see 4.4) |
+| Editing or deleting something taken at a shop | Cannot leave more paid than taken at that shop (`checkShopChange`) |
 
 A fast double tap on Save cannot save twice (a ref guards it). If saving fails, the error shows and everything typed stays.
 
@@ -130,7 +136,7 @@ For one payment where part was yours and part was for other people, for example 
 - A **Split card** appears under the type choice: your share (updates as you type), a bar of your share against theirs, and one row per person (initials, name, amount, remove), plus **+ Add person**.
 - On save, **your share is saved as an expense** and each other person's share is saved as **money given** to that person. All parts share `split_group` (the id of your share) and are saved together or not at all.
 - From Review details on a detected bank payment, the same split works, and Undo removes all parts.
-- Deleting one part asks: **Only this one** or **All N parts** (your share and what was paid for others). Editing one part does not change the others: for example a new date on your share stays unchanged on the other parts.
+- Deleting one part asks: **Only this one** or **All N parts** (your share and what was paid for others). Editing one part carries what the parts share to the others: date and time, payment method, bank account and UPI reference. Amounts, names and categories stay each part's own.
 
 ### 4.5 Repeat purchases
 
@@ -192,13 +198,13 @@ Nov: carried over ₹1,000 + taken ₹1,500 - paid ₹0     = ₹2,500 due
 - **Paying the shop only lowers what is due.** It is never counted as spending again, so nothing is counted twice.
 - What is left at the end of a month carries to the next. A month with nothing still carries it.
 - **Already due** (what your diary says when you start) is carried into the first month and is not spending.
-- You cannot pay more than what is due.
+- You cannot pay more than what is due, and you cannot delete or lower something taken if that would leave more paid than taken. Change or delete the payment first.
 
 **Set up:** More > Shop accounts > **+ New shop account**: name, category, usual amount, already due.
 
-**On the Expenses tab:** one slim strip per account: icon, name, "₹2,500.00 due · 38 this month ›" and a **+ ₹40** button. The button opens a sheet with the last amount filled in; saving adds the item (shown in lists as "Pay later"). Tap the rest of the strip for the Statement.
+**On the Expenses tab:** one slim strip per account: icon, name, "₹2,500.00 due · 38 this month ›" and a **+ ₹40** button. The button opens a sheet with the last amount filled in and a **Date** pill (Today, or pick an earlier day); saving adds the item (shown in lists as "Pay later"). Tap the rest of the strip for the Statement.
 
-**Statement page:** the amount due (big) with a breakdown ("₹1,000 from Oct + ₹1,500 in Nov"), **+ ₹40** and **Pay** (UPI or Cash). Below, one folding row per month, newest first and open: due at the end, three figures (From last month, Taken · N times, Paid) and the entries by day. Swipe to edit or delete.
+**Statement page:** the amount due (big) with a breakdown ("₹1,000 from Oct + ₹1,500 in Nov"), **+ ₹40** and **Pay** (UPI or Cash, with the same Date pill). Under it, **Edit account** opens a card to change the shop name (also written on its entries and remembered names), the usual amount and the amount already due (not below what is already paid); an account with no entries can be removed there. Below, one folding row per month, newest first and open: due at the end, three figures (From last month, Taken · N times, Paid) and the entries by day. Swipe to edit or delete.
 
 **Paying from a bank SMS:** on the Review card, money paid shows a **Shop** choice (when at least one shop account exists). The bank name is remembered for next time (see 4.10). A payment edited later is titled "Edit Shop Payment" and cannot be turned into something else.
 
@@ -230,7 +236,7 @@ The ring colors were checked for color-blind safety, and every slice is also nam
 - Each card is laid out like the form: name and signed amount; a choice bar (**Expense | I gave | Returned** for money paid, **Income | I took | Received back** for money received, plus **Shop** when shop accounts exist); Category icons with + New (hidden for given, taken and shop); read-only lines (Payment method, Bank account, Date & time, UPI reference, Found in); the main button; links **Review details**, **Ignore**, **Bank message**.
 - **Possible duplicates** show a warning with the payment they look like; Ignore is the main action and Add anyway asks first.
 - **Add all N** adds only items that are ready (not a possible duplicate, has a category, a person has a name, and not money received back, returned or a shop payment). It asks first.
-- Add, Ignore and Add all show an **Undo** bar for a few seconds. If Add all stops partway because of an error, Undo is still offered for the payments already added.
+- Add, Ignore and Add all show an **Undo** bar for a few seconds. Undo keeps an entry you changed after adding it, and says so. If Add all stops partway because of an error, Undo is still offered for the payments already added.
 - A payment you added and later **delete** (from a list or its edit screen) comes back here to be reviewed again, instead of staying marked as added.
 - Category suggestions never use the hidden **Loans** category, whether they come from a past entry, remembered names or the form's name and purpose chips.
 - If the name matches a person with money still open, the card suggests Money received back or Money returned (only when the amount fits the remaining amount) and says why.
@@ -247,8 +253,9 @@ The ring colors were checked for color-blind safety, and every slice is also nam
 
 More > Backup & restore.
 
-- **Save backup file** writes one JSON file and opens the share sheet (Google Drive, WhatsApp to yourself, email). The screen shows the last backup time. Keep the file off the phone.
+- **Save backup file** writes one JSON file and opens the share sheet (Google Drive, WhatsApp to yourself, email). The screen shows when the last backup file was made (the app cannot know whether you then saved it somewhere, and says so). Keep the file off the phone.
 - **Choose backup file** reads a file, checks it, then asks before replacing everything on the phone. It shows how many entries the file has and how many the phone has now. Restoring is all or nothing, and it also clears payments waiting for review.
+- **Undo last restore:** just before a restore, a copy of what was on the phone is kept in the app's own storage (only the latest one). The screen then offers "Undo last restore", which brings it back and uses the copy up.
 - Included: categories, bank accounts, shop accounts, templates, all transactions, remembered names, settings. Not included: the captured bank messages (they hold raw SMS text; what you added from them is in your transactions).
 - A backup from an older database version restores with defaults for new columns, and the built-in categories it lacks (Income, Uncategorized, Loans) are added, so money given or taken can still be saved. A backup from a newer version is refused, and so is a file with no categories (it is treated as damaged).
 - The file is **not encrypted or password protected**. The screen says so.
@@ -261,7 +268,8 @@ More > Backup & restore.
 - **Swipe rows:** right edits, left deletes (always with confirmation). Needs `react-native-gesture-handler` (the root layout wraps the app). Deleting works the same from every list and from the edit screen (`useDeleteTransaction`):
   - a payment that came from a bank SMS goes back to Review payments;
   - a part of a split asks whether to delete only it or all parts;
-  - money given or taken is refused, with the reason, when deleting it would leave money received back or returned larger than what there was at that time.
+  - money given or taken is refused, with the reason, when deleting it would leave money received back or returned larger than what there was at that time;
+  - something taken at a shop is refused when deleting it would leave more paid than taken.
 - **Counts and today lines** use a shared grey pill (`CountPill`).
 - **Empty, loading and error states** use shared components (`States.js`).
 
@@ -290,7 +298,7 @@ Other rules:
 - **SQL** uses `?` placeholders only. Multi-step writes use `withExclusiveTransactionAsync`.
 - **Spending queries** share one definition (`IN_RANGE` in `src/db/reports.js`, `NOT_SHOP_PAYMENT` in `src/db/transactions.js`). A new kind of entry must be added there, or it will be counted wrongly.
 
-## 6. Data model (SQLite, schema version 6)
+## 6. Data model (SQLite, schema version 7)
 
 Migrations run in `SQLiteProvider` `onInit`, tracked with `PRAGMA user_version`. Each step runs in its own transaction. **Shipped migrations are never edited**; changes are appended as a new one.
 
@@ -325,6 +333,7 @@ Version history:
 | 4 | `loan_type` (money given and taken) and the Loans category |
 | 5 | `due_at`, `split_group`, and the `name_memory` table |
 | 6 | `shop_accounts`, `shop_account_id` and `shop_entry`, and `name_memory.shop_account_id` |
+| 7 | No new columns: names saved with extra spaces inside are made single-spaced, so one person no longer shows as two |
 
 Upgrading never loses data, and an upgrade cannot be undone. Save a backup before installing an update that includes a new version.
 
@@ -332,9 +341,9 @@ Upgrading never loses data, and an upgrade cannot be undone. Save a backup befor
 
 | Area | Choice | Version |
 | --- | --- | --- |
-| Framework | React Native with Expo (managed, Continuous Native Generation) | Expo SDK 58 (`expo ~58.0.22`), React Native 0.88.1, React 19.3.0 |
+| Framework | React Native with Expo (managed, Continuous Native Generation) | Expo SDK 58 (`expo ~58.0.23`), React Native 0.88.1, React 19.3.0 |
 | Language | JavaScript only (no TypeScript, by requirement) | |
-| Navigation | Expo Router, file-based, routes in `src/app/` | `expo-router ~58.0.29` |
+| Navigation | Expo Router, file-based, routes in `src/app/` | `expo-router ~58.0.30` |
 | Database | `expo-sqlite`, WAL mode, foreign keys on | `~58.0.15` |
 | Styling | React Native `StyleSheet`, tokens in `src/constants/theme.js` | |
 | Icons | Thin outline icons drawn with `react-native-svg` (no icon font package) | 15.16.0 |
@@ -421,7 +430,7 @@ The JS side loads it with `requireOptionalNativeModule`, so the app still runs w
 
 ## 11. Testing
 
-`npm test` runs **113 tests** (Node test runner, no phone needed). They use only made-up data.
+`npm test` runs **118 tests** (Node test runner, no phone needed). They use only made-up data.
 
 | File | Covers |
 | --- | --- |
@@ -433,6 +442,7 @@ The JS side loads it with `requireOptionalNativeModule`, so the app still runs w
 | `repeats` | Grouping repeat purchases |
 | `newFeatures` | Split payments, remembered names, return by, backup and restore, audit fixes |
 | `shopAccounts` | The diary rule, spending exclusions, shop payments from bank SMS, backup of shop accounts |
+| `moreFixes` | Shop accounts that cannot go below zero, editing and removing a shop account, Undo keeping an edit, split parts staying together, the version 7 name cleanup |
 | `gapFixes` | Deleting a bank payment, editing or deleting money given or taken, the hidden Loans category, split duplicates and split delete, names, restoring an old backup, Add all stopping partway |
 
 Commands: `npm run check` runs lint, format check and tests. `npx expo export --platform android --output-dir <folder>` confirms the app bundles. There are no screen (UI) tests: screens are checked by hand on a phone.
@@ -474,14 +484,16 @@ Commands: `npm run check` runs lint, format check and tests. `npx expo export --
 | 8 | Restoring a backup older than schema version 4 lost the Loans category | Built-in categories are added on restore (4.11) |
 | 9 | If Add all failed partway, there was no Undo | Undo is offered for what was added (4.10) |
 
-Possible, not verified: the last backup time may be recorded even if the share sheet was dismissed; Review details can contradict the SMS direction (for example Paid to Received); Undo after editing an entry you just added removes the edit too.
+A second round the same day fixed what was listed here as possible: Review details can no longer turn a bank payment around, Undo keeps an edited entry, the backup screen no longer claims a backup was saved, and shop accounts cannot go below zero.
+
+**Not yet seen on a phone:** everything added since 2026-11-04 passes automated tests and bundles, but has not been checked on a device. The automated tests do not cover how screens look or behave.
 
 Other limits:
 - Bank sender IDs and formats for most of the 39 banks follow common published formats and are **not verified** with real messages. Kotak debit and BoB messages still need real samples.
 - Parsing is regex based and will miss new formats (kept as "unrecognized").
 - Android battery management can still stop the listener despite the reconnect logic.
-- A typo in a name creates a separate person (the "Same person as...?" hint and Rename help). Names saved before 2026-11-11 with a double space inside also stay separate until you use Rename to combine them.
-- Editing one part of a split payment (for example its date) does not change the other parts.
+- A typo in a name creates a separate person (the "Same person as...?" hint and Rename help).
+- The backup file has no password. Categories and templates cannot be renamed, merged or removed. Return by dates do not send a reminder notification.
 - No dark mode, no app lock, no crash reporting (by design, no network). Accessibility labels exist on main controls but are not audited.
 - `LICENSE` is still the Expo template's file and needs a decision.
 
@@ -500,7 +512,7 @@ Other limits:
 | A delete or edit cannot make a person inconsistent | Money received back or returned may never be more than what there was to receive or return at that time. A person who was already inconsistent can still be edited, so old data is never locked |
 | Deleting a bank payment un-adds it | The payment returns to Review payments instead of staying marked as added |
 
-Ideas not built (put on hold by the owner): app lock with fingerprint or PIN; manage categories (rename, merge, hide, delete) and templates; warn on a manual entry that matches a recent payment; reminder notification for Return by dates; repeating entries (rent, subscriptions); budget per category; CSV export; "Add" inside the payment alert; a year view in Reports; dark mode; a warning when no bank SMS has been read for several days or the last backup is old.
+Ideas not built (put on hold by the owner): app lock with fingerprint or PIN; manage categories (rename, merge, hide, delete) and templates; warn on a manual entry that matches a recent payment; reminder notification for Return by dates; repeating entries (rent, subscriptions); budget per category; CSV export; "Add" inside the payment alert; a year view in Reports; dark mode; a password on the backup file.
 
 ## 15. Change log
 
@@ -515,6 +527,7 @@ Ideas not built (put on hold by the owner): app lock with fingerprint or PIN; ma
 | 2026-11-04 | Repeat purchases share a row; split payment; remembered names; return by date; month grid; faster lists; backup and restore; Reports "total on top" layout; keyboard fix; to-do card on Expenses |
 | 2026-11-11 | Audit fixes (return by from an old round, remembered names on rename and edit); shop accounts (schema 6) and their redesign; small spends built then removed; More tab redesigned ("Review first"); this documentation |
 | 2026-11-11 | Fixed the nine gaps from the code review: deleting a bank payment returns it to Review; editing or deleting money given or taken is checked against money received back; Loans never suggested for expenses; split payments compared by total for duplicates and deleted as a whole on request; search boxes stay while they have text; names saved with single spaces; old backups restore the built-in categories; Add all keeps Undo when it stops partway (113 tests) |
+| 2026-11-11 | Second round of fixes: shop accounts cannot go below zero and can be edited or removed; a date can be picked when adding or paying at a shop; Review details keeps the bank payment's direction; Undo keeps an edited entry; split parts share date and payment details on edit; a copy is kept before a restore, with "Undo last restore"; reminders on Expenses for a quiet bank SMS reader and an old backup; old names with extra spaces joined (schema 7); Expo patch updates (118 tests) |
 
 ## 16. Suggested review focus
 

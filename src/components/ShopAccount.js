@@ -38,15 +38,15 @@ function useShopSheets(account, onChanged) {
     setSheet(kind);
   }
 
-  async function addPurchase(amountPaise) {
-    await addShopPurchase(db, account.id, amountPaise);
+  async function addPurchase(amountPaise, method, occurredAt) {
+    await addShopPurchase(db, account.id, amountPaise, occurredAt);
     setSheet(null);
     showMessage(`Added ${formatINR(amountPaise)} at ${account.name}`);
     onChanged();
     return null;
   }
 
-  async function pay(amountPaise, method) {
+  async function pay(amountPaise, method, occurredAt) {
     const tooMuch = await checkShopPayment(db, account.id, amountPaise);
     if (tooMuch) {
       return tooMuch;
@@ -55,7 +55,7 @@ function useShopSheets(account, onChanged) {
       amountPaise,
       accountId: null,
       purpose: null,
-      occurredAt: Date.now(),
+      occurredAt,
       paymentMethod: method,
       reference: null,
       notes: null,
@@ -74,6 +74,7 @@ function useShopSheets(account, onChanged) {
         title={`Add at ${account.name}`}
         note="Counted as spending today. Paid later from this account."
         initialAmountText={usual ? paiseToInputString(usual) : ''}
+        withDate
         submitLabel="Add"
         onSubmit={addPurchase}
         onClose={() => setSheet(null)}
@@ -85,6 +86,7 @@ function useShopSheets(account, onChanged) {
         note={`${formatINR(account.duePaise)} due. Paying lowers what is due; it is not counted as spending again.`}
         initialAmountText={paiseToInputString(account.duePaise)}
         withMethod
+        withDate
         submitLabel="Pay"
         onSubmit={pay}
         onClose={() => setSheet(null)}

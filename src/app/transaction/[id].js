@@ -6,9 +6,9 @@ import { EmptyState, ErrorState, LoadingState } from '../../components/States';
 import { listAccounts } from '../../db/accounts';
 import { listCategories } from '../../db/categories';
 import { rememberEditedName } from '../../db/detected';
-import { checkShopPayment } from '../../db/shopAccounts';
+import { checkShopChange, checkShopPayment } from '../../db/shopAccounts';
 import { checkLoanChange, checkReturnAmount, getLoanBalances } from '../../db/reports';
-import { getTransaction, updateTransaction } from '../../db/transactions';
+import { getTransaction, updateSplitShared, updateTransaction } from '../../db/transactions';
 import { useDeleteTransaction } from '../../hooks/useDeleteTransaction';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
 import { paiseToInputString } from '../../utils/money';
@@ -48,12 +48,18 @@ export default function EditTransactionScreen() {
     }
     // Lowering money given or taken, changing its type or name, or moving an
     // entry in time must not leave money received back or returned too large.
-    const refused = await checkLoanChange(db, { edit: { id: transactionId, values } });
+    // The same for a shop account: lowering something taken must not leave more paid than taken.
+    const change = { edit: { id: transactionId, values } };
+    const refused = (await checkLoanChange(db, change)) ?? (await checkShopChange(db, change));
     return refused ? { amount: refused } : null;
   }
 
   async function handleSubmit(values) {
     await updateTransaction(db, transactionId, values);
+    // A split is one payment: its date, method, bank account and reference follow on every part.
+    if (data.transaction.splitGroup != null) {
+      await updateSplitShared(db, data.transaction.splitGroup, transactionId, values);
+    }
     // A fix to a bank payment's name or category is remembered for next time.
     // Only a helper: a failure here must not lose the saved change.
     // The form does not change shop fields, so they are passed along for the memory.

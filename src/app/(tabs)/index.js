@@ -25,6 +25,7 @@ import { TodoCard } from '../../components/TodoCard';
 import { TotalTile } from '../../components/TotalTile';
 import { colors, fontSize, radius, spacing } from '../../constants/theme';
 import { listAccounts } from '../../db/accounts';
+import { countEntries, getLastBackupAt } from '../../db/backup';
 import { listCategories } from '../../db/categories';
 import { countPendingDetected } from '../../db/detected';
 import { getDashboardData } from '../../db/reports';
@@ -34,9 +35,27 @@ import { groupRepeats } from '../../domain/repeats';
 import { pickableCategories } from '../../domain/transactionForm';
 import { useDeleteTransaction } from '../../hooks/useDeleteTransaction';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
-import { syncDetectedPayments } from '../../services/detection';
-import { formatMonthLabel, getMonthKey, getMonthRange } from '../../utils/dates';
+import { getQuietDays, syncDetectedPayments } from '../../services/detection';
+import { daysBetween, formatMonthLabel, getMonthKey, getMonthRange } from '../../utils/dates';
 import { formatINR } from '../../utils/money';
+
+// A backup older than this many days is due again.
+const BACKUP_EVERY_DAYS = 7;
+
+/**
+ * The backup reminder's title, or null when none is needed: nothing to back
+ * up yet, or a backup file was made in the last week.
+ */
+function backupReminder(entryCount, lastBackupAt, now) {
+  if (entryCount === 0) {
+    return null;
+  }
+  if (lastBackupAt == null) {
+    return 'No backup saved yet';
+  }
+  const days = daysBetween(lastBackupAt, now);
+  return days >= BACKUP_EVERY_DAYS ? `Last backup ${days} days ago` : null;
+}
 
 // Below this many entries the month fits on a screen, so no search box is shown.
 const SEARCH_FROM = 6;
@@ -77,15 +96,19 @@ export default function ExpensesScreen() {
     // Pick up payments captured while the app was closed before reading totals.
     await syncDetectedPayments(db);
     const month = getMonthRange(monthKey);
-    const [dashboard, pendingCount, entries, categories, accounts, shopAccounts] = await Promise.all([
-      getDashboardData(db, monthKey),
-      countPendingDetected(db),
-      // Expenses and income only (newest first); money given and taken has its own tab.
-      listTransactions(db, { startMs: month.startMs, endMs: month.endMs, kind: 'regular' }),
-      listCategories(db),
-      listAccounts(db),
-      listShopAccounts(db),
-    ]);
+    const [dashboard, pendingCount, entries, categories, accounts, shopAccounts, quietDays, entryCount, lastBackupAt] =
+      await Promise.all([
+        getDashboardData(db, monthKey),
+        countPendingDetected(db),
+        // Expenses and income only (newest first); money given and taken has its own tab.
+        listTransactions(db, { startMs: month.startMs, endMs: month.endMs, kind: 'regular' }),
+        listCategories(db),
+        listAccounts(db),
+        listShopAccounts(db),
+        getQuietDays(db),
+        countEntries(db),
+        getLastBackupAt(db),
+      ]);
     return {
       ...dashboard,
       pendingCount,
@@ -93,6 +116,8 @@ export default function ExpensesScreen() {
       categories: pickableCategories(categories),
       accounts,
       shopAccounts,
+      quietDays,
+      backupTitle: backupReminder(entryCount, lastBackupAt, Date.now()),
     };
   }, [db, monthKey]);
   const { data, error, reload } = useFocusQuery(loader);
@@ -244,6 +269,15 @@ export default function ExpensesScreen() {
                 message: `${plural(data.pendingCount, 'payment needs', 'payments need')} review`,
                 onPress: () => router.push('/review-payments'),
               },
+              // No bank message for days: Android may have stopped the reader.
+              data.quietDays != null && {
+                key: 'detection',
+                icon: 'detection',
+                title: `No bank SMS read for ${data.quietDays} days`,
+                action: 'Check',
+                message: `No bank SMS read for ${data.quietDays} days. Payment detection may have stopped`,
+                onPress: () => router.push('/auto-detect'),
+              },
               data.missingPurposeCount > 0 && {
                 key: 'purpose',
                 icon: 'purpose',
@@ -252,6 +286,14 @@ export default function ExpensesScreen() {
                 action: 'Add',
                 message: `${plural(data.missingPurposeCount, 'expense needs', 'expenses need')} a purpose`,
                 onPress: reviewMissingPurpose,
+              },
+              data.backupTitle && {
+                key: 'backup',
+                icon: 'backup',
+                title: data.backupTitle,
+                action: 'Back up',
+                message: data.backupTitle,
+                onPress: () => router.push('/backup'),
               },
             ].filter(Boolean)}
           />
