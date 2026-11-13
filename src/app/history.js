@@ -7,18 +7,25 @@
 
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useCallback, useState } from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
-import { Amount } from '../components/Amount';
-import { Chip } from '../components/Chip';
-import { ChipRow } from '../components/ChipRow';
-import { ChoiceRow, countFilters, FilterButton, FilterSheet, PaymentFilters } from '../components/FilterSheet';
-import { ICONS } from '../components/icons';
-import { MonthSelector } from '../components/MonthSelector';
-import { EmptyState, ErrorState, LoadingState } from '../components/States';
-import { RepeatGroupRow } from '../components/RepeatGroupRow';
-import { TextField } from '../components/TextField';
-import { colors, fontSize, spacing } from '../constants/theme';
+import { useCallback, useMemo, useState } from 'react';
+import { FlatList, StyleSheet, View } from 'react-native';
+import { Chip } from '../components/basics/Chip';
+import { SideScrollRow } from '../components/basics/SideScrollRow';
+import {
+  ChoiceRow,
+  countFilters,
+  FilterButton,
+  FilterSheet,
+  NO_FILTERS,
+  PaymentFilters,
+} from '../components/sections/FilterSheet';
+import { ICONS } from '../components/icons/icons';
+import { MonthSelector } from '../components/sections/MonthSelector';
+import { EmptyState, ErrorState, LoadingState } from '../components/basics/ScreenStates';
+import { TotalsLine } from '../components/sections/TotalsLine';
+import { TransactionListItem } from '../components/rows/TransactionListItem';
+import { TextField } from '../components/basics/TextField';
+import { colors, spacing } from '../constants/theme';
 import { listAccounts } from '../db/accounts';
 import { listCategories } from '../db/categories';
 import { listTransactions } from '../db/transactions';
@@ -27,6 +34,7 @@ import { pickableCategories } from '../domain/transactionForm';
 import { useDeleteTransaction } from '../hooks/useDeleteTransaction';
 import { useFocusQuery } from '../hooks/useFocusQuery';
 import { getMonthKey, getMonthRange } from '../utils/dates';
+import { plural } from '../utils/text';
 
 // The main chips (see listTransactions `kind`). All three leave money given and taken out.
 const KIND_FILTERS = [
@@ -35,19 +43,14 @@ const KIND_FILTERS = [
   { value: 'received', label: 'Received' },
 ];
 
-const NO_FILTERS = { categoryId: null, paymentMethod: null, accountId: null };
-
 // listTransactions `sort`: by date, newest or oldest first.
 const SORTS = [
   { value: 'desc', label: 'Newest', draw: ICONS.latest },
   { value: 'asc', label: 'Oldest', draw: ICONS.oldest },
 ];
 
-/** Total of one direction. */
-function sumPaise(transactions, direction) {
-  return transactions
-    .filter((transaction) => transaction.direction === direction)
-    .reduce((sum, transaction) => sum + transaction.amountPaise, 0);
+function Separator() {
+  return <View style={styles.separator} />;
 }
 
 export default function HistoryScreen() {
@@ -55,26 +58,25 @@ export default function HistoryScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const [search, setSearch] = useState('');
-  const [monthKey, setMonthKey] = useState(getMonthKey());
+  const [monthKey, setMonthKey] = useState(getMonthKey);
   const [allMonths, setAllMonths] = useState(false);
   const [kind, setKind] = useState('regular');
   const [missingPurpose, setMissingPurpose] = useState(false);
-  const [filters, setFilters] = useState(NO_FILTERS);
+  const [paymentFilters, setPaymentFilters] = useState(NO_FILTERS);
   const [sort, setSort] = useState('desc');
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Links from other screens open this page with filter params, such as the
-  // Expenses tab's "expenses need a purpose" (missing-purpose) or a category
-  // tapped on the Reports tab (category, with categoryId).
-  // Adjusting state while rendering (instead of in an effect) is React's
-  // recommended way to react to changed inputs, and avoids a flash of the old list.
+  // Links from Expenses (missing purpose) and Reports (a category) open this page with filter params.
+  // Applied while rendering, not in an effect, so the old list never flashes.
   const [appliedLinkAt, setAppliedLinkAt] = useState(null);
   if (params.filter && params.at !== appliedLinkAt) {
     setAppliedLinkAt(params.at);
     setKind(params.filter === 'category' ? 'paid' : 'regular');
-    setFilters(params.filter === 'category' ? { ...NO_FILTERS, categoryId: Number(params.categoryId) } : NO_FILTERS);
+    setPaymentFilters(
+      params.filter === 'category' ? { ...NO_FILTERS, categoryId: Number(params.categoryId) } : NO_FILTERS,
+    );
     setMissingPurpose(params.filter === 'missing-purpose');
-    setSearch(params.search ?? '');
+    setSearch('');
     if (params.month) {
       setMonthKey(params.month);
       setAllMonths(false);
@@ -84,23 +86,23 @@ export default function HistoryScreen() {
   const loader = useCallback(async () => {
     const range = allMonths ? {} : getMonthRange(monthKey);
     const [transactions, categories, accounts] = await Promise.all([
-      listTransactions(db, { ...range, kind, search, missingPurpose, sort, ...filters }),
+      listTransactions(db, { ...range, kind, search, missingPurpose, sort, ...paymentFilters }),
       listCategories(db),
       listAccounts(db),
     ]);
     return { transactions, categories: pickableCategories(categories), accounts };
-  }, [db, monthKey, allMonths, kind, search, missingPurpose, sort, filters]);
+  }, [db, monthKey, allMonths, kind, search, missingPurpose, sort, paymentFilters]);
   const { data, error, reload } = useFocusQuery(loader);
 
-  const transactions = data?.transactions ?? [];
-  const spentPaise = sumPaise(transactions, 'debit');
-  const receivedPaise = sumPaise(transactions, 'credit');
-  const sheetFilterCount = countFilters(filters);
+  // Regrouped only when new data loads, not on every render.
+  const rows = useMemo(() => (data ? groupRepeats(data.transactions) : []), [data]);
+  const transactionCount = data?.transactions.length ?? 0;
+  const paymentFilterCount = countFilters(paymentFilters);
   // Everything set inside the sheet (shown on the Filters button).
-  const panelFilterCount = [missingPurpose, allMonths, sort === 'asc'].filter(Boolean).length + sheetFilterCount;
-  const hasFilters = Boolean(search.trim()) || kind !== 'regular' || missingPurpose || sheetFilterCount > 0;
+  const sheetFilterCount = [missingPurpose, allMonths, sort === 'asc'].filter(Boolean).length + paymentFilterCount;
+  const hasFilters = Boolean(search.trim()) || kind !== 'regular' || missingPurpose || paymentFilterCount > 0;
 
-  const handleDelete = useDeleteTransaction(reload);
+  const deleteWithConfirm = useDeleteTransaction(reload);
   // Kept the same between renders, so rows that did not change are not redrawn.
   const openTransaction = useCallback(
     (transaction) => router.push({ pathname: '/transaction/[id]', params: { id: transaction.id } }),
@@ -108,24 +110,24 @@ export default function HistoryScreen() {
   );
   // Tapping the selected choice again clears that filter.
   const toggleFilter = (key, value) =>
-    setFilters((current) => ({ ...current, [key]: current[key] === value ? null : value }));
+    setPaymentFilters((current) => ({ ...current, [key]: current[key] === value ? null : value }));
 
   function clearFilters() {
     setSearch('');
     setKind('regular');
     setMissingPurpose(false);
-    setFilters(NO_FILTERS);
+    setPaymentFilters(NO_FILTERS);
   }
 
   function clearSheet() {
     setMissingPurpose(false);
     setAllMonths(false);
     setSort('desc');
-    setFilters(NO_FILTERS);
+    setPaymentFilters(NO_FILTERS);
   }
 
   function renderEmpty() {
-    if (missingPurpose && !search.trim() && sheetFilterCount === 0) {
+    if (missingPurpose && !search.trim() && paymentFilterCount === 0) {
       return (
         <EmptyState
           title="All caught up"
@@ -171,7 +173,7 @@ export default function HistoryScreen() {
 
         <View style={styles.chipsLine}>
           <View style={styles.flex}>
-            <ChipRow>
+            <SideScrollRow>
               {KIND_FILTERS.map((option) => (
                 <Chip
                   key={option.label}
@@ -180,9 +182,9 @@ export default function HistoryScreen() {
                   onPress={() => setKind(option.value)}
                 />
               ))}
-            </ChipRow>
+            </SideScrollRow>
           </View>
-          <FilterButton count={panelFilterCount} onPress={() => setFiltersOpen(true)} />
+          <FilterButton count={sheetFilterCount} onPress={() => setFiltersOpen(true)} />
         </View>
       </View>
 
@@ -191,19 +193,19 @@ export default function HistoryScreen() {
           visible={filtersOpen}
           onClose={() => setFiltersOpen(false)}
           onClear={clearSheet}
-          showLabel={`Show ${transactions.length} ${transactions.length === 1 ? 'entry' : 'entries'}`}
+          showLabel={`Show ${plural(transactionCount, 'entry', 'entries')}`}
         >
           <ChoiceRow label="Sort by" choices={SORTS} value={sort} onSelect={setSort} />
-          <ChipRow>
+          <SideScrollRow>
             <Chip
               label="Missing purpose"
               selected={missingPurpose}
               onPress={() => setMissingPurpose(!missingPurpose)}
             />
             <Chip label="All months" selected={allMonths} onPress={() => setAllMonths(!allMonths)} />
-          </ChipRow>
+          </SideScrollRow>
           <PaymentFilters
-            filters={filters}
+            filters={paymentFilters}
             onToggle={toggleFilter}
             categories={data.categories}
             accounts={data.accounts}
@@ -217,27 +219,26 @@ export default function HistoryScreen() {
       {data ? (
         <FlatList
           // Repeat purchases (same name, category and day) share one row.
-          data={groupRepeats(transactions)}
+          data={rows}
           keyExtractor={(item) => item.key}
           contentContainerStyle={styles.list}
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={
-            transactions.length > 0 ? (
-              <Text style={styles.summary}>
-                {`${transactions.length} ${transactions.length === 1 ? 'transaction' : 'transactions'} · Spent `}
-                <Amount paise={spentPaise} direction="debit" size="sm" />
-                {' · Received '}
-                <Amount paise={receivedPaise} direction="credit" size="sm" />
-              </Text>
+            transactionCount > 0 ? (
+              <TotalsLine
+                entries={data.transactions}
+                countText={plural(transactionCount, 'transaction', 'transactions')}
+                style={styles.summary}
+              />
             ) : null
           }
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          ItemSeparatorComponent={Separator}
           renderItem={({ item }) => (
-            <RepeatGroupRow
+            <TransactionListItem
               group={item}
               background={colors.background}
               onEdit={openTransaction}
-              onDelete={handleDelete}
+              onDelete={deleteWithConfirm}
             />
           )}
           ListEmptyComponent={renderEmpty()}
@@ -261,6 +262,7 @@ const styles = StyleSheet.create({
   },
   chipsLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
-  summary: { fontSize: fontSize.sm, color: colors.textMuted, paddingVertical: spacing.sm },
+  // Added to TotalsLine's own text style.
+  summary: { paddingVertical: spacing.sm },
   separator: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
 });

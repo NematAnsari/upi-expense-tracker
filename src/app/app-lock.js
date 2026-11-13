@@ -3,11 +3,11 @@
 // minute away. There is no separate PIN to remember or forget.
 
 import { useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import { useAppLock } from '../components/AppLock';
-import { Card } from '../components/Card';
+import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useAppLock } from '../components/wrappers/AppLockProvider';
+import { Card } from '../components/basics/Card';
 import { colors, fontSize, spacing } from '../constants/theme';
-import { showMessage } from '../ui/notify';
+import { showError, showMessage } from '../utils/notify';
 
 export default function AppLockScreen() {
   const { enabled, setEnabled } = useAppLock();
@@ -20,7 +20,7 @@ export default function AppLockScreen() {
         showMessage(on ? 'App lock is on' : 'App lock is off');
       }
     } catch (error) {
-      Alert.alert('Could not change App lock', error.message || 'Please try again.');
+      showError('Could not change App lock', error);
     } finally {
       setBusy(false);
     }

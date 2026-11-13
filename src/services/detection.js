@@ -2,8 +2,9 @@
 // src/db/ because it depends on the Android-only native module.
 
 import * as listener from '../../modules/upi-notification-listener';
-import { getLastDetectedAt, syncCapturedNotifications } from '../db/detected';
+
 import { daysBetween } from '../utils/dates';
+import { getLastDetectedAt, syncCapturedNotifications } from '../db/detectedCapture';
 
 // With no bank message for this many days, detection may have stopped.
 const QUIET_DAYS = 3;
@@ -32,7 +33,7 @@ export async function syncDetectedPayments(db) {
  * battery). null when detection is not set up, nothing was ever read, or a
  * message came recently.
  */
-export async function getQuietDays(db, now = Date.now()) {
+export async function getDaysSinceLastMessage(db, now = Date.now()) {
   if (!listener.isAvailable || !listener.isPermissionGranted()) {
     return null;
   }

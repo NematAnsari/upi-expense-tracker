@@ -1,17 +1,8 @@
-// Banks the app can name from a payment message.
-//
-// Each bank is matched by its SMS sender ID (the title, e.g. "JD-KOTAKB-S")
-// or by its name in the message text. Detection works for every bank; this
-// list only decides the label ("PNB ••1234" instead of "Account ••1234").
-//
-// When several banks match, the longest match wins (see findBank), so a name
-// that contains another bank's name ("City Union Bank", "South Indian Bank",
-// "State Bank of India") is still recognised correctly. The list order is
-// just for reading.
-//
-// Sender IDs differ by region and change over time; the ones here are common
-// published ones and may not cover every variant. The bank's name in the text
-// is the fallback.
+// Banks the app can name from a payment message, by SMS sender ID or by name
+// in the text. Detection works for every bank; this list only sets the label
+// ("PNB ••1234"). Sender IDs vary, so the name in the text is the fallback.
+
+import { UPI_ID } from '../utils/maskText.js';
 
 export const BANKS = [
   // Public sector banks
@@ -79,7 +70,6 @@ export const BANKS = [
 ];
 
 // UPI IDs like "shop@kotak" name the other person's bank, not yours, so they are ignored.
-const UPI_ID = /[\w.-]+@[a-z][a-z0-9]*/gi;
 
 /** Length of the longest match of any of the bank's patterns in `source` (0 if none). */
 function matchLength(bank, source) {

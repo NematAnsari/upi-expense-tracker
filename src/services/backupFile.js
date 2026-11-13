@@ -7,6 +7,15 @@ import * as Sharing from 'expo-sharing';
 import { buildBackup, markBackupSaved } from '../db/backup';
 import { getMonthKey } from '../utils/dates';
 
+/** Writes `data` as JSON into `file`, replacing any file already there. */
+function writeJsonFile(file, data) {
+  if (file.exists) {
+    file.delete();
+  }
+  file.create();
+  file.write(JSON.stringify(data));
+}
+
 /**
  * Writes a backup file and opens the share sheet so you can keep it somewhere
  * safe off the phone. Returns how many entries it holds.
@@ -14,11 +23,7 @@ import { getMonthKey } from '../utils/dates';
 export async function shareBackup(db) {
   const backup = await buildBackup(db);
   const file = new File(Paths.cache, `expense-backup-${getMonthKey()}-${Date.now()}.json`);
-  if (file.exists) {
-    file.delete();
-  }
-  file.create();
-  file.write(JSON.stringify(backup));
+  writeJsonFile(file, backup);
   if (!(await Sharing.isAvailableAsync())) {
     throw new Error('Sharing is not available on this phone.');
   }
@@ -27,7 +32,7 @@ export async function shareBackup(db) {
   return backup.tables.transactions.length;
 }
 
-/** Lets you pick a backup file. Returns the parsed backup, or null if you cancelled. */
+/** Lets you pick a backup file. Returns the parsed backup, or null if you canceled. */
 export async function pickBackup() {
   const result = await DocumentPicker.getDocumentAsync({
     // Some apps label .json files as plain text or a generic file.
@@ -53,12 +58,7 @@ const safetyFile = () => new File(Paths.document, 'before-restore.json');
  * so a restore from the wrong file can be undone. Only the latest one is kept.
  */
 export async function saveSafetyCopy(db) {
-  const file = safetyFile();
-  if (file.exists) {
-    file.delete();
-  }
-  file.create();
-  file.write(JSON.stringify(await buildBackup(db)));
+  writeJsonFile(safetyFile(), await buildBackup(db));
 }
 
 /** The copy saved before the last restore, or null when there is none (or it cannot be read). */

@@ -51,7 +51,8 @@ function findDirection(text) {
   return debit < credit ? 'debit' : 'credit';
 }
 
-function cleanName(value) {
+/** The name tidied, or null when it is empty or not a name. */
+function readName(value) {
   const name = value?.trim().replace(/\s+/g, ' ');
   if (!name || NOT_A_NAME.test(name)) {
     return null;
@@ -62,13 +63,17 @@ function cleanName(value) {
 /** The first match of a global pattern that is a real name, or null. */
 function findName(pattern, text) {
   for (const match of text.matchAll(pattern)) {
-    const name = cleanName(match[1]);
+    const name = readName(match[1]);
     if (name) {
       return name;
     }
   }
   return null;
 }
+
+// Raise this by one whenever this file learns new message formats. Messages
+// it could not read before are then read again once (see detectedCapture.js).
+export const PARSER_VERSION = 1;
 
 /**
  * Returns { direction, amountPaise, bankName, bankShort, accountLast4,
@@ -99,7 +104,7 @@ export function parsePaymentNotification({ title = '', text = '' }) {
   const accountDigits = message.match(ACCOUNT)?.[1];
   const reference = message.match(REFERENCE)?.[1] ?? message.match(UPI_SLASH_REFERENCE)?.[1];
   const counterparty = paidYou
-    ? cleanName(paidYou[1])
+    ? readName(paidYou[1])
     : findName(direction === 'debit' ? PAID_TO : RECEIVED_FROM, message);
 
   return {

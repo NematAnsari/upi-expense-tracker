@@ -1,43 +1,35 @@
-// Given & Taken tab: the totals, I gave money / I took money, and the people
-// list with two tabs on top: Money given (people you gave money to) and Money
-// taken (people you took money from). Each row says whether the remaining
-// amount is to receive or to return, and since when; fully settled people come last.
-// Tap a person to open their page. Swipe a person right to record money
-// received back or returned. With 6 or more people a search box filters by name.
-// Filters opens a sheet: show all / pending / settled, and sort order.
+// Given & Taken tab: the two totals, then people in "Given (n)" and "Taken (n)" tabs.
 // Kept apart from the Expenses tab: none of this is spending or income.
 
 import { useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Card } from '../../components/Card';
-import { ChoiceRow, FilterButton, FilterSheet } from '../../components/FilterSheet';
-import { ICONS } from '../../components/icons';
-import { PersonBalanceRow } from '../../components/PersonBalanceRow';
-import { SegmentedControl } from '../../components/SegmentedControl';
-import { EmptyState, ErrorState, LoadingState } from '../../components/States';
-import { SwipeableRow } from '../../components/SwipeableRow';
-import { TextField } from '../../components/TextField';
-import { TotalTile } from '../../components/TotalTile';
+import { Card } from '../../components/basics/Card';
+import { ChoiceRow, FilterSheet } from '../../components/sections/FilterSheet';
+import { ICONS } from '../../components/icons/icons';
+import { PersonBalanceRow } from '../../components/rows/PersonBalanceRow';
+import { SegmentedControl } from '../../components/basics/SegmentedControl';
+import { EmptyState, ErrorState, LoadingState } from '../../components/basics/ScreenStates';
+import { SearchFilterBar } from '../../components/sections/SearchFilterBar';
+import { SwipeableRow } from '../../components/basics/SwipeableRow';
+import { TotalTile } from '../../components/sections/TotalTile';
 import { colors, fontSize, spacing } from '../../constants/theme';
-import { getLoanBalances } from '../../db/reports';
 import {
   BALANCE_TEXT,
   PEOPLE_SHOW,
   PEOPLE_SORTS,
   personLists,
-  repaymentFor,
-  showPeople,
+  returnTypeFor,
+  filterPeople,
   sortPeople,
-} from '../../domain/loans';
+} from '../../domain/people';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
 import { formatINR } from '../../utils/money';
+import { plural } from '../../utils/text';
+import { getPeopleBalances } from '../../db/people';
 
-// Below this many people the whole list fits on a screen, so no search box is shown.
-const SEARCH_FROM = 6;
-
-const LISTS = {
+const TABS = {
   given: { label: 'Given', empty: 'When you give money to someone, tap + on Money to receive above.' },
   taken: { label: 'Taken', empty: 'When you take money from someone, tap + on Money to return above.' },
 };
@@ -48,11 +40,6 @@ const SORT_ICONS = { latest: ICONS.latest, largest: ICONS.largest, oldest: ICONS
 const SHOW_CHOICES = PEOPLE_SHOW.map((option) => ({ ...option, draw: SHOW_ICONS[option.value] }));
 const SORT_CHOICES = PEOPLE_SORTS.map((option) => ({ ...option, draw: SORT_ICONS[option.value] }));
 
-/** "1 person", "3 people" */
-function peopleCount(count) {
-  return `${count} ${count === 1 ? 'person' : 'people'}`;
-}
-
 /** The tiles' last line: "Given today ₹500.00" or "Nothing today". */
 function todayText(what, paise) {
   return paise > 0 ? `${what} today ${formatINR(paise)}` : 'Nothing today';
@@ -61,27 +48,27 @@ function todayText(what, paise) {
 export default function GivenTakenScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
-  const [list, setList] = useState('given');
+  const [tab, setTab] = useState('given');
   const [search, setSearch] = useState('');
-  const [show, setShow] = useState('all');
+  const [showFilter, setShowFilter] = useState('all');
   const [sort, setSort] = useState('latest');
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const loader = useCallback(() => getLoanBalances(db), [db]);
+  const loader = useCallback(() => getPeopleBalances(db), [db]);
   const { data, error, reload } = useFocusQuery(loader);
 
-  function openPerson(person) {
-    router.push({ pathname: '/loan/[person]', params: { person: person.person } });
+  function openPerson(balance) {
+    router.push({ pathname: '/person/[name]', params: { name: balance.person } });
   }
-  const addLoan = (loanType) => router.push({ pathname: '/transaction/new', params: { loanType } });
+  const openNewEntry = (loanType) => router.push({ pathname: '/transaction/new', params: { loanType } });
   // Same as the person page's main button: name and remaining amount filled in.
-  const recordReturn = (person) =>
+  const recordReturn = (balance) =>
     router.push({
       pathname: '/transaction/new',
-      params: { loanType: repaymentFor(person.status), person: person.person, amountPaise: person.amountPaise },
+      params: { loanType: returnTypeFor(balance.status), person: balance.person, amountPaise: balance.amountPaise },
     });
 
   function clearSheet() {
-    setShow('all');
+    setShowFilter('all');
     setSort('latest');
   }
 
@@ -92,24 +79,27 @@ export default function GivenTakenScreen() {
     return <LoadingState />;
   }
 
-  const inList = (name) => data.people.filter((person) => personLists(person).includes(name));
+  const peopleInTab = (name) => data.people.filter((balance) => personLists(balance).includes(name));
+  const tabPeople = peopleInTab(tab);
   // Matches any part of the name, ignoring case: "rah" finds Rahul and Sarah.
-  const term = search.trim().toLowerCase();
-  const people = sortPeople(
-    showPeople(inList(list), show).filter((person) => !term || person.person.toLowerCase().includes(term)),
+  const searchTerm = search.trim().toLowerCase();
+  const shownPeople = sortPeople(
+    filterPeople(tabPeople, showFilter).filter(
+      (balance) => !searchTerm || balance.person.toLowerCase().includes(searchTerm),
+    ),
     sort,
   );
-  const filterCount = (show === 'all' ? 0 : 1) + (sort === 'latest' ? 0 : 1);
-  const options = Object.entries(LISTS).map(([value, { label }]) => ({
+  const filterCount = (showFilter === 'all' ? 0 : 1) + (sort === 'latest' ? 0 : 1);
+  const tabOptions = Object.entries(TABS).map(([value, { label }]) => ({
     value,
-    label: `${label} (${inList(value).length})`,
+    label: `${label} (${peopleInTab(value).length})`,
   }));
 
   function renderList() {
-    if (inList(list).length === 0) {
-      return <EmptyState title="No one here yet" message={LISTS[list].empty} />;
+    if (tabPeople.length === 0) {
+      return <EmptyState title="No one here yet" message={TABS[tab].empty} />;
     }
-    if (people.length === 0 && term) {
+    if (shownPeople.length === 0 && searchTerm) {
       return (
         <EmptyState
           title="No one found"
@@ -119,28 +109,28 @@ export default function GivenTakenScreen() {
         />
       );
     }
-    if (people.length === 0) {
+    if (shownPeople.length === 0) {
       return (
         <EmptyState
           title="No one found"
-          message={show === 'pending' ? 'Everyone here is fully settled.' : 'No one here is fully settled yet.'}
+          message={showFilter === 'pending' ? 'Everyone here is fully settled.' : 'No one here is fully settled yet.'}
           actionLabel="Show everyone"
-          onAction={() => setShow('all')}
+          onAction={() => setShowFilter('all')}
         />
       );
     }
     return (
       <Card>
-        {people.map((person, index) => (
-          <View key={person.person.toLowerCase()} style={index > 0 && styles.divider}>
+        {shownPeople.map((balance, index) => (
+          <View key={balance.person.toLowerCase()} style={index > 0 && styles.divider}>
             <SwipeableRow
               leftAction={
-                person.status === 'settled'
+                balance.status === 'settled'
                   ? null
-                  : { label: 'Record', color: colors.people, onPress: () => recordReturn(person) }
+                  : { label: 'Record', color: colors.people, onPress: () => recordReturn(balance) }
               }
             >
-              <PersonBalanceRow person={person} onPress={openPerson} />
+              <PersonBalanceRow person={balance} onPress={openPerson} />
             </SwipeableRow>
           </View>
         ))}
@@ -152,22 +142,22 @@ export default function GivenTakenScreen() {
     <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <View style={styles.totals}>
         <TotalTile
-          label={BALANCE_TEXT.owesYou}
-          paise={data.owedToYouPaise}
+          label={BALANCE_TEXT.toReceive}
+          paise={data.toReceivePaise}
           direction="credit"
           action="Add money I gave"
           zeroText="Nothing to receive"
           subText={todayText('Given', data.givenTodayPaise)}
-          onPress={() => addLoan('lent')}
+          onPress={() => openNewEntry('lent')}
         />
         <TotalTile
-          label={BALANCE_TEXT.youOwe}
-          paise={data.youOwePaise}
+          label={BALANCE_TEXT.toReturn}
+          paise={data.toReturnPaise}
           direction="debit"
           action="Add money I took"
           zeroText="Nothing to return"
           subText={todayText('Taken', data.takenTodayPaise)}
-          onPress={() => addLoan('borrowed')}
+          onPress={() => openNewEntry('borrowed')}
         />
       </View>
 
@@ -178,33 +168,26 @@ export default function GivenTakenScreen() {
         />
       ) : (
         <>
-          <SegmentedControl options={options} value={list} onChange={setList} />
-          <View style={styles.searchLine}>
-            {/* Stays while it has text, so a search you typed can always be seen and cleared. */}
-            {data.people.length >= SEARCH_FROM || search.trim() ? (
-              <TextField
-                value={search}
-                onChangeText={setSearch}
-                placeholder="Search people by name"
-                returnKeyType="search"
-                autoCorrect={false}
-                accessibilityLabel="Search people by name"
-                style={styles.search}
-              />
-            ) : null}
-            <FilterButton count={filterCount} onPress={() => setFiltersOpen(true)} />
-          </View>
+          <SegmentedControl options={tabOptions} value={tab} onChange={setTab} />
+          <SearchFilterBar
+            itemCount={data.people.length}
+            search={search}
+            onSearch={setSearch}
+            placeholder="Search people by name"
+            filterCount={filterCount}
+            onOpenFilters={() => setFiltersOpen(true)}
+          />
           <FilterSheet
             visible={filtersOpen}
             onClose={() => setFiltersOpen(false)}
             onClear={clearSheet}
-            showLabel={`Show ${peopleCount(people.length)}`}
+            showLabel={`Show ${plural(shownPeople.length, 'person', 'people')}`}
           >
-            <ChoiceRow label="Show" choices={SHOW_CHOICES} value={show} onSelect={setShow} />
+            <ChoiceRow label="Show" choices={SHOW_CHOICES} value={showFilter} onSelect={setShowFilter} />
             <ChoiceRow label="Sort by" choices={SORT_CHOICES} value={sort} onSelect={setSort} />
           </FilterSheet>
           {renderList()}
-          {people.some((person) => person.status !== 'settled') ? (
+          {shownPeople.some((balance) => balance.status !== 'settled') ? (
             <Text style={styles.hint}>Tip: swipe a person right to record money received back or returned.</Text>
           ) : null}
         </>
@@ -217,9 +200,6 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, gap: spacing.lg, paddingBottom: spacing.xl },
   totals: { flexDirection: 'row', gap: spacing.md },
-  // Search on the left, Filters on the right (alone on the right when there is no search box).
-  searchLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.sm },
-  search: { flex: 1 },
   divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   hint: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center' },
 });

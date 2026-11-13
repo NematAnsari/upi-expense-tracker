@@ -8,7 +8,7 @@ import {
   getDayRange,
   getMonthKey,
   getMonthRange,
-  getWeekBuckets,
+  getWeeksOfMonth,
   isCurrentOrFutureMonth,
   shiftMonth,
   withDateFrom,
@@ -45,7 +45,7 @@ test('day range is local midnight to midnight', () => {
 
 test('week buckets cover the whole month with no gaps', () => {
   for (const monthKey of ['2026-02', '2028-02', '2026-04', '2026-10']) {
-    const buckets = getWeekBuckets(monthKey);
+    const buckets = getWeeksOfMonth(monthKey);
     const { startMs, endMs } = getMonthRange(monthKey);
     assert.equal(buckets[0].startMs, startMs);
     assert.equal(buckets.at(-1).endMs, endMs);
@@ -53,9 +53,9 @@ test('week buckets cover the whole month with no gaps', () => {
       assert.equal(buckets[i].startMs, buckets[i - 1].endMs);
     }
   }
-  assert.equal(getWeekBuckets('2026-02').length, 4); // 28 days
-  assert.equal(getWeekBuckets('2028-02').at(-1).label, '29-29 Feb'); // leap year
-  assert.equal(getWeekBuckets('2026-10').at(-1).label, '29-31 Oct');
+  assert.equal(getWeeksOfMonth('2026-02').length, 4); // 28 days
+  assert.equal(getWeeksOfMonth('2028-02').at(-1).label, '29-29 Feb'); // leap year
+  assert.equal(getWeeksOfMonth('2026-10').at(-1).label, '29-31 Oct');
 });
 
 test('current or future month check', () => {

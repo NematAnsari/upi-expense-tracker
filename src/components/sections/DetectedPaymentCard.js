@@ -1,0 +1,272 @@
+import { useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import { colors, fontSize, spacing } from '../../constants/theme';
+import { LOAN_TYPES } from '../../domain/entryTypes';
+import { pickableCategories } from '../../domain/transactionForm';
+import { formatShortDate, formatTime } from '../../utils/dates';
+import { formatINR } from '../../utils/money';
+import { sourceAppName } from '../../utils/sourceApps';
+import { Amount } from '../basics/Amount';
+import { Button } from '../basics/Button';
+import { Card } from '../basics/Card';
+import { CategoryIconRow } from '../form/CategoryIconRow';
+import { Chip } from '../basics/Chip';
+import { LineIcon } from '../basics/LineIcon';
+import { SegmentedControl } from '../basics/SegmentedControl';
+import { TextLink } from '../basics/TextLink';
+import { ICONS, METHOD_ICONS } from '../icons/icons';
+
+// "What is this?" as a choice bar, short enough for three on a card.
+// `none` stands for a normal expense or income (no loan type).
+const TYPE_CHOICES = {
+  debit: [
+    { value: 'none', label: 'Expense' },
+    { value: 'lent', label: 'I gave' },
+    { value: 'borrowed_repaid', label: 'Returned' },
+  ],
+  credit: [
+    { value: 'none', label: 'Income' },
+    { value: 'borrowed', label: 'I took' },
+    { value: 'lent_repaid', label: 'Received back' },
+  ],
+};
+
+// Paying a shop account (tea taken now, paid later). Offered for money paid,
+// once you have a shop account.
+const SHOP_CHOICE = { value: 'shop', label: 'Shop' };
+
+/** "Looks like a repeat of ₹1.00 received at 4:37 PM (SMS · BOI ••2222)." */
+function describeOriginal(original) {
+  const what = `${formatINR(original.amountPaise)} ${original.direction === 'credit' ? 'received' : 'paid'}`;
+  const where =
+    original.kind === 'saved'
+      ? 'already in your transactions'
+      : [sourceAppName(original.sourcePackage), original.accountName].filter(Boolean).join(' · ');
+  return `Looks like a repeat of ${what} at ${formatTime(original.at)} (${where}). Usually safe to ignore.`;
+}
+
+/** A read-only line like the form's More details: icon, label, value on the right. */
+function InfoLine({ draw, label, value, last }) {
+  return (
+    <View style={[styles.line, !last && styles.lineBorder]}>
+      <LineIcon draw={draw} />
+      <Text style={styles.lineLabel}>{label}</Text>
+      <Text style={styles.lineValue} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * One payment found in a bank SMS or UPI app notification, waiting for review.
+ * Laid out like the Add/Edit form:
+ *   Rahul Kumar                     −₹500.00
+ *   [ Expense | I gave | Returned ]            what is this?
+ *   Category *  (icons, scroll sideways, + New)   expenses and income only
+ *   (card) Payment method · (bank) Bank account · (cal) Date & time · (#) UPI reference · Found in
+ *   [ Add expense ]
+ *   Review details · Ignore · Bank message
+ * Nothing is assumed: the choice is always visible before adding.
+ * Possible duplicates hide the choices and make Ignore the main action.
+ * onCreateCategory(name) saves a new category and returns it (or throws).
+ * loanType: a loan type, 'shop' (a payment to a shop account) or null.
+ * shopAccounts / shopAccount / onChangeShopAccount(id): for the Shop choice.
+ */
+export function DetectedPaymentCard({
+  item,
+  categories,
+  categoryId,
+  onChangeCategory,
+  onCreateCategory,
+  loanType,
+  onChangeLoanType,
+  suggestionNote,
+  busy,
+  onAdd,
+  onEdit,
+  onIgnore,
+  shopAccounts = [],
+  shopAccount = null,
+  onChangeShopAccount,
+}) {
+  // The full bank message stays folded away until asked for.
+  const [messageOpen, setMessageOpen] = useState(false);
+
+  const received = item.direction === 'credit';
+  const duplicate = Boolean(item.possibleDuplicate);
+  const shop = loanType === 'shop' ? shopAccount : null;
+  const loan = loanType && !shop ? LOAN_TYPES[loanType] : null;
+  const choices = [
+    ...(TYPE_CHOICES[item.direction] ?? TYPE_CHOICES.debit),
+    ...(item.direction === 'debit' && shopAccounts.length > 0 ? [SHOP_CHOICE] : []),
+  ];
+  // A loan is tracked per person, so it cannot be saved without a name.
+  const needsName = Boolean(loan) && !item.counterparty;
+
+  function mainButtonLabel() {
+    if (shop) {
+      return 'Add as shop payment';
+    }
+    if (loan) {
+      return needsName ? 'Add name and save' : loan.addLabel;
+    }
+    return received ? 'Add income' : 'Add expense';
+  }
+
+  const title = item.counterparty ?? (received ? 'Money received' : 'Payment made');
+  // The name was filled from what you saved last time for the bank's spelling.
+  const renamed =
+    item.bankName && item.counterparty && item.bankName.trim().toLowerCase() !== item.counterparty.trim().toLowerCase();
+
+  return (
+    <Card style={[styles.card, duplicate && styles.duplicateCard]}>
+      <View style={styles.header}>
+        <View style={styles.titleBlock}>
+          <Text style={styles.title} numberOfLines={2}>
+            {title}
+          </Text>
+          {renamed ? (
+            <Text style={styles.bankName} numberOfLines={1}>
+              {`Bank shows "${item.bankName}" · filled from last time`}
+            </Text>
+          ) : null}
+        </View>
+        <Amount paise={item.amountPaise} direction={item.direction} size="xl" showSign />
+      </View>
+
+      {duplicate && item.original ? <Text style={styles.duplicateText}>{describeOriginal(item.original)}</Text> : null}
+
+      {duplicate ? null : (
+        <View style={styles.block}>
+          <SegmentedControl
+            options={choices}
+            value={loanType ?? 'none'}
+            onChange={(value) => onChangeLoanType(value === 'none' ? null : value)}
+            small
+          />
+          {suggestionNote ? <Text style={styles.suggestion}>{suggestionNote}</Text> : null}
+          {loan ? <Text style={styles.note}>{loan.note}</Text> : null}
+          {shop ? (
+            <>
+              {shopAccounts.length > 1 ? (
+                <View style={styles.shops}>
+                  {shopAccounts.map((account) => (
+                    <Chip
+                      key={account.id}
+                      label={account.name}
+                      selected={account.id === shop.id}
+                      onPress={() => onChangeShopAccount(account.id)}
+                    />
+                  ))}
+                </View>
+              ) : null}
+              <Text style={styles.note}>
+                {`Lowers what is due at ${shop.name} (${formatINR(shop.duePaise)} now). Not counted as spending again: the teas already were.`}
+              </Text>
+            </>
+          ) : null}
+        </View>
+      )}
+
+      {/* Money given and taken is saved under "Loans", so there is no category to choose. */}
+      {duplicate || loan || shop ? null : (
+        <View style={styles.block}>
+          <Text style={styles.sectionLabel}>
+            Category<Text style={styles.required}> *</Text>
+          </Text>
+          <CategoryIconRow
+            categories={pickableCategories(categories)}
+            selectedId={categoryId}
+            onSelect={onChangeCategory}
+            onCreate={onCreateCategory}
+          />
+        </View>
+      )}
+
+      <View style={styles.lines}>
+        <InfoLine draw={METHOD_ICONS.UPI} label="Payment method" value="UPI" />
+        <InfoLine draw={ICONS.bank} label="Bank account" value={item.accountName ?? 'Not known'} />
+        <InfoLine
+          draw={ICONS.date}
+          label="Date & time"
+          value={`${formatShortDate(item.postedAt)}, ${formatTime(item.postedAt)}`}
+        />
+        {item.reference ? <InfoLine draw={ICONS.reference} label="UPI reference" value={item.reference} /> : null}
+        <InfoLine
+          draw={ICONS.notes}
+          label="Found in"
+          value={sourceAppName(item.sourcePackage) ?? 'Notification'}
+          last
+        />
+      </View>
+
+      {duplicate ? (
+        <Button label="Ignore duplicate" onPress={onIgnore} disabled={busy} />
+      ) : (
+        <Button
+          label={mainButtonLabel()}
+          onPress={needsName ? onEdit : onAdd}
+          disabled={busy || (!loan && !shop && categoryId == null)}
+        />
+      )}
+
+      <View style={styles.links}>
+        {duplicate ? (
+          <TextLink label="Add anyway" onPress={onAdd} disabled={busy} />
+        ) : (
+          <>
+            {/* A shop payment has nothing more to fill in. */}
+            {shop ? null : <TextLink label="Review details" onPress={onEdit} disabled={busy} />}
+            <TextLink label="Ignore" onPress={onIgnore} disabled={busy} muted />
+          </>
+        )}
+        <TextLink
+          label={messageOpen ? 'Hide message' : 'Bank message'}
+          onPress={() => setMessageOpen(!messageOpen)}
+          muted
+        />
+      </View>
+
+      {messageOpen ? (
+        <View style={styles.message}>
+          {item.title ? <Text style={styles.messageTitle}>{item.title}</Text> : null}
+          <Text style={styles.messageText} selectable>
+            {item.rawText}
+          </Text>
+        </View>
+      ) : null}
+    </Card>
+  );
+}
+
+const styles = StyleSheet.create({
+  card: { gap: spacing.md },
+  duplicateCard: { borderColor: colors.warning, borderWidth: 1 },
+  header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.md },
+  titleBlock: { flex: 1, gap: 2 },
+  title: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text },
+  bankName: { fontSize: fontSize.xs, color: colors.textMuted },
+  duplicateText: { fontSize: fontSize.sm, color: colors.warning },
+  block: { gap: spacing.sm },
+  sectionLabel: { fontSize: fontSize.sm, fontWeight: '600', color: colors.text },
+  required: { color: colors.danger },
+  suggestion: { fontSize: fontSize.sm, fontWeight: '600', color: colors.people },
+  note: { fontSize: fontSize.sm, color: colors.textMuted },
+  shops: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  // Same look as the form's More details lines, a little shorter.
+  lines: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  line: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 44 },
+  lineBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  lineLabel: { width: 110, fontSize: fontSize.sm, color: colors.textMuted },
+  lineValue: { flex: 1, textAlign: 'right', fontSize: fontSize.sm, fontWeight: '600', color: colors.text },
+  links: { flexDirection: 'row', justifyContent: 'space-around' },
+  message: {
+    gap: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  messageTitle: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textMuted },
+  messageText: { fontSize: fontSize.sm, color: colors.textMuted },
+});

@@ -1,29 +1,26 @@
 import { PAYMENT_METHODS } from '../constants/categories.js';
+import { getDayRange } from '../utils/dates.js';
 import { parseAmountToPaise } from '../utils/money.js';
-import { isValidLoanType } from './loans.js';
+import { cleanName } from '../utils/text.js';
+import { isValidLoanType } from './entryTypes.js';
 
 // Small tolerance so a timestamp taken a moment ago is never flagged as "future".
 const FUTURE_TOLERANCE_MS = 60 * 1000;
 
 export const MAX_CATEGORY_NAME_LENGTH = 30;
+export const MAX_ACCOUNT_NAME_LENGTH = 40;
 
 // 'debit' = money paid (an expense). 'credit' = money received (income).
-export const DIRECTIONS = ['debit', 'credit'];
-
-function startOfDay(ms) {
-  const date = new Date(ms);
-  date.setHours(0, 0, 0, 0);
-  return date.getTime();
-}
+const DIRECTIONS = ['debit', 'credit'];
 
 function optionalText(value) {
   const trimmed = String(value ?? '').trim();
   return trimmed === '' ? null : trimmed;
 }
 
-/** A name with one space between words, so "Rahul  Kumar" and "Rahul Kumar" are the same person. */
-function nameText(value) {
-  return optionalText(String(value ?? '').replace(/\s+/g, ' '));
+/** One space between words, so "Rahul  Kumar" and "Rahul Kumar" are the same person. null when empty. */
+function optionalName(value) {
+  return cleanName(value) || null;
 }
 
 /**
@@ -55,7 +52,7 @@ export function validateTransactionForm(form, now = Date.now()) {
   const loanType = form.loanType ?? null;
   if (!isValidLoanType(loanType, direction)) {
     errors.loanType = 'Choose what this payment is.';
-  } else if (loanType && !nameText(form.merchant)) {
+  } else if (loanType && !optionalName(form.merchant)) {
     // Loans are tracked per person, so the name is needed.
     errors.merchant = "Enter the person's name.";
   }
@@ -69,7 +66,7 @@ export function validateTransactionForm(form, now = Date.now()) {
   // An optional "return by" date, only for money given or taken.
   const takesDueDate = loanType === 'lent' || loanType === 'borrowed';
   const dueAt = takesDueDate && Number.isFinite(form.dueAt) ? form.dueAt : null;
-  if (dueAt != null && Number.isFinite(form.occurredAt) && dueAt < startOfDay(form.occurredAt)) {
+  if (dueAt != null && Number.isFinite(form.occurredAt) && dueAt < getDayRange(new Date(form.occurredAt)).startMs) {
     errors.dueAt = 'Return by cannot be before the date of this entry.';
   }
 
@@ -89,7 +86,7 @@ export function validateTransactionForm(form, now = Date.now()) {
       categoryId: form.categoryId,
       occurredAt: form.occurredAt,
       paymentMethod: form.paymentMethod,
-      merchant: nameText(form.merchant),
+      merchant: optionalName(form.merchant),
       reference: optionalText(form.reference),
       notes: optionalText(form.notes),
     },
@@ -125,16 +122,14 @@ export function validateTemplateForm(form) {
       amountPaise,
       categoryId: form.categoryId,
       purpose: optionalText(form.purpose),
-      merchant: nameText(form.merchant),
+      merchant: optionalName(form.merchant),
       paymentMethod: PAYMENT_METHODS.includes(form.paymentMethod) ? form.paymentMethod : PAYMENT_METHODS[0],
     },
   };
 }
 
 export function validateCategoryName(rawName) {
-  const name = String(rawName ?? '')
-    .trim()
-    .replace(/\s+/g, ' ');
+  const name = cleanName(rawName);
   if (name === '') {
     return { error: 'Enter a category name.' };
   }

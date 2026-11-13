@@ -4,6 +4,7 @@
 // person, so it shows under Money to receive on Given & Taken.
 
 import { parseAmountToPaise } from '../utils/money.js';
+import { cleanName } from '../utils/text.js';
 
 /** A new, empty "their share" line for the form. `key` keeps list rows stable. */
 export function emptySplit(key) {
@@ -19,9 +20,7 @@ export function emptySplit(key) {
 export function validateSplits(totalPaise, splits) {
   const parts = [];
   for (const [index, split] of splits.entries()) {
-    const merchant = String(split.merchant ?? '')
-      .trim()
-      .replace(/\s+/g, ' ');
+    const merchant = cleanName(split.merchant);
     const amount = parseAmountToPaise(split.amountText);
     if (!merchant) {
       return { error: `Enter a name for person ${index + 1}.` };

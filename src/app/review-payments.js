@@ -7,32 +7,37 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
 import { Alert, Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
-import { Button } from '../components/Button';
-import { DetectedPaymentCard } from '../components/DetectedPaymentCard';
-import { EmptyState, ErrorState, LoadingState } from '../components/States';
-import { UndoBar } from '../components/UndoBar';
+import { Button } from '../components/basics/Button';
+import { EmptyState, ErrorState, LoadingState } from '../components/basics/ScreenStates';
+import { UndoBar } from '../components/basics/UndoBar';
+import { DetectedPaymentCard } from '../components/sections/DetectedPaymentCard';
 import { colors, fontSize, spacing } from '../constants/theme';
 import { createCategory, listCategories } from '../db/categories';
 import {
   addDetectedAsTransaction,
   addDetectedBatch,
-  detectedToTransaction,
   ignoreDetected,
   listPendingDetected,
-  restoreDetected,
+  unignoreDetected,
   undoAddDetected,
 } from '../db/detected';
+import { checkReturnAmount, getPeopleBalances } from '../db/people';
+import { checkShopPayment, listShopAccounts } from '../db/shopAccounts';
+import { loanLabel } from '../domain/entryTypes';
+import { suggestReturnType } from '../domain/people';
+import { canAddInBatch, loanTypeOf, shopOf, suggestionNote, transactionFor, typeOf } from '../domain/reviewChoices';
 import { useFocusQuery } from '../hooks/useFocusQuery';
+import { useUndoableAction } from '../hooks/useUndoableAction';
 import { syncDetectedPayments } from '../services/detection';
-import { checkReturnAmount, getLoanBalances } from '../db/reports';
-import { checkShopPayment, listShopAccounts, shopPaymentValues } from '../db/shopAccounts';
-import { describeNet, loanLabel, maxReturnPaise, suggestLoanType } from '../domain/loans';
-import { categoryIdForSave } from '../domain/transactionForm';
 import { formatDayLabel } from '../utils/dates';
 import { formatINR } from '../utils/money';
+import { showError } from '../utils/notify';
+import { plural } from '../utils/text';
 
 // The list scrolls a box you are typing in (a "+ New" name) above the keyboard.
 const renderKeyboardAware = (props) => <KeyboardAwareScrollView {...props} bottomOffset={spacing.xl} />;
+
+const Separator = () => <View style={styles.separator} />;
 
 /** [{ title: 'Today', data: [...] }, { title: 'Yesterday', data: [...] }, ...] */
 function groupByDay(items) {
@@ -52,21 +57,17 @@ function groupByDay(items) {
 export default function ReviewPaymentsScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  // Choices made on a card before tapping Add (item id -> category id / loan type,
-  // which is how "What is this?" is stored).
+  // Picks made on a card before tapping Add: item id -> loan type or 'shop', category id, shop account id.
+  const [typeChoices, setTypeChoices] = useState({});
   const [categoryChoices, setCategoryChoices] = useState({});
-  const [loanChoices, setLoanChoices] = useState({});
-  // Which shop account a "Shop" payment goes to (item id -> account id), when there are several.
   const [shopChoices, setShopChoices] = useState({});
-  const [undoAction, setUndoAction] = useState(null);
-  const hideUndo = useCallback(() => setUndoAction(null), []);
+  const choices = { types: typeChoices, categories: categoryChoices, shops: shopChoices };
 
   const loader = useCallback(async () => {
     await syncDetectedPayments(db);
     const [categories, balances, shopAccounts] = await Promise.all([
       listCategories(db),
-      getLoanBalances(db),
+      getPeopleBalances(db),
       listShopAccounts(db),
     ]);
     const pending = await listPendingDetected(db, categories);
@@ -74,143 +75,23 @@ export default function ReviewPaymentsScreen() {
     // Possible duplicates hide the choice on their card, so they never get a hidden suggestion.
     const items = pending.map((item) => ({
       ...item,
-      suggestion: item.possibleDuplicate ? null : suggestLoanType(item, balances.people),
+      suggestion: item.possibleDuplicate ? null : suggestReturnType(item, balances.people),
     }));
     return { categories, items, shopAccounts };
   }, [db]);
   const { data, error, reload } = useFocusQuery(loader);
-
-  /**
-   * Runs an action once (no double taps), then offers Undo.
-   * hasPartial(): true when the action failed after changing something (Add
-   * all stopped partway), so Undo is still offered for what was done.
-   */
-  async function runWithUndo(action, undo, message, hasPartial) {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    try {
-      await action();
-      setUndoAction({ message, undo });
-    } catch (actionError) {
-      console.error(actionError);
-      const partial = Boolean(hasPartial?.());
-      Alert.alert(
-        'Something went wrong',
-        `${actionError.message || 'Please try again.'}${partial ? '\n\nThe payments already added can be undone.' : ''}`,
-      );
-      if (partial) {
-        setUndoAction({ message: 'Stopped partway. Undo removes the ones added.', undo });
-      }
-    } finally {
-      setBusy(false);
-      reload();
-    }
-  }
-
-  async function handleUndo() {
-    const action = undoAction;
-    setUndoAction(null);
-    if (!action) {
-      return;
-    }
-    try {
-      await action.undo();
-    } catch (undoError) {
-      Alert.alert('Could not undo', undoError.message || 'Please try again.');
-    } finally {
-      reload();
-    }
-  }
-
-  /**
-   * "What is this?" for an item: your choice on the card, else the suggestion
-   * (money back), else what you saved for this name last time, else expense/income.
-   * A loan type, 'shop' (a payment to a shop account) or null.
-   */
-  function choiceOf(item) {
-    if (item.id in loanChoices) {
-      return loanChoices[item.id];
-    }
-    if (item.suggestion) {
-      return item.suggestion.loanType;
-    }
-    if (item.possibleDuplicate) {
-      return null;
-    }
-    if (item.rememberedShopAccountId && shopOf(item)) {
-      return 'shop';
-    }
-    return item.rememberedLoanType ?? null;
-  }
-
-  /** The loan type to save: none for a shop payment. */
-  function loanTypeOf(item) {
-    const choice = choiceOf(item);
-    return choice === 'shop' ? null : choice;
-  }
-
-  /** The shop account a "Shop" payment goes to: your pick, last time's, or the first one. */
-  function shopOf(item) {
-    const id = shopChoices[item.id] ?? item.rememberedShopAccountId;
-    return data.shopAccounts.find((account) => account.id === id) ?? data.shopAccounts[0] ?? null;
-  }
-
-  /** Why the card picked money back for you, shown while that suggestion is selected. */
-  function suggestionNote(item) {
-    const { suggestion } = item;
-    if (!suggestion || loanTypeOf(item) !== suggestion.loanType) {
-      return null;
-    }
-    const remaining = describeNet(suggestion.person.netPaise);
-    return suggestion.loanType === 'lent_repaid'
-      ? `${suggestion.person.person} has ${remaining}, so this is marked as Money received back. Change it if needed.`
-      : `You have ${remaining} to ${suggestion.person.person}, so this is marked as Money returned. Change it if needed.`;
-  }
-
-  /** The transaction an item becomes with the choices made on its card. */
-  function transactionFor(item) {
-    if (choiceOf(item) === 'shop') {
-      const shop = shopOf(item);
-      return shopPaymentValues(shop, detectedToTransaction(item, shop.categoryId, null));
-    }
-    const loanType = loanTypeOf(item);
-    const categoryId = categoryIdForSave(
-      { loanType, categoryId: categoryChoices[item.id] ?? item.suggestedCategoryId },
-      data.categories,
-    );
-    return detectedToTransaction(item, categoryId, loanType);
-  }
-
-  /**
-   * Ready for "Add all": not a possible duplicate, has a category, money given or
-   * taken has a name, and it is not money received back or returned or a shop
-   * payment (those are checked against what is left, one at a time).
-   */
-  function isReady(item) {
-    const values = transactionFor(item);
-    return (
-      !item.possibleDuplicate &&
-      choiceOf(item) !== 'shop' &&
-      values.categoryId != null &&
-      (!values.loanType || Boolean(item.counterparty)) &&
-      maxReturnPaise(values.loanType, 0) === null
-    );
-  }
+  const { busy, undoAction, runWithUndo, handleUndo, hideUndo } = useUndoableAction(reload);
 
   async function handleAdd(item) {
-    const values = transactionFor(item);
-    // Money received back or returned cannot be more than the remaining amount,
-    // and a shop payment cannot be more than what is due there.
+    const values = transactionFor(item, choices, data);
+    // Money back cannot be more than what is left, and a shop payment not more than what is due.
     let tooMuch = null;
     try {
       tooMuch = values.shopEntry
         ? await checkShopPayment(db, values.shopAccountId, values.amountPaise)
         : await checkReturnAmount(db, values);
     } catch (checkError) {
-      console.error(checkError);
-      Alert.alert('Something went wrong', checkError.message || 'Please try again.');
+      showError('Something went wrong', checkError);
       return;
     }
     if (tooMuch && values.shopEntry) {
@@ -225,18 +106,11 @@ export default function ReviewPaymentsScreen() {
       ]);
       return;
     }
-    const kind = values.shopEntry
-      ? `Payment to ${values.merchant}`
-      : values.loanType
-        ? loanLabel(values.loanType)
-        : item.direction === 'credit'
-          ? 'Income'
-          : 'Expense';
     const save = () =>
       runWithUndo(
         () => addDetectedAsTransaction(db, item.id, values),
         () => undoAddDetected(db, item.id),
-        `Added: ${kind}, ${formatINR(item.amountPaise)}`,
+        `Added: ${addedLabel(item, values)}, ${formatINR(item.amountPaise)}`,
       );
 
     if (item.possibleDuplicate) {
@@ -256,7 +130,7 @@ export default function ReviewPaymentsScreen() {
   function handleIgnore(item) {
     runWithUndo(
       () => ignoreDetected(db, item.id),
-      () => restoreDetected(db, item.id),
+      () => unignoreDetected(db, item.id),
       `Ignored: ${formatINR(item.amountPaise)}`,
     );
   }
@@ -271,21 +145,21 @@ export default function ReviewPaymentsScreen() {
   const handleEdit = (item) =>
     router.push({
       pathname: '/transaction/new',
-      params: { detectedId: item.id, loanType: loanTypeOf(item) ?? '' },
+      params: { detectedId: item.id, loanType: loanTypeOf(item, choices, data) ?? '' },
     });
 
-  /** Adds every ready item with the choices shown on its card. */
-  function handleAddAll(items) {
-    const ready = items.filter(isReady);
+  /** Adds every item that needs no check, with the choices shown on its card. */
+  function handleAddAll() {
+    const ready = data.items.filter((item) => canAddInBatch(item, choices, data));
     if (ready.length === 0) {
       return;
     }
-    const skipped = items.length - ready.length;
+    const skipped = data.items.length - ready.length;
     Alert.alert(
-      `Add ${ready.length} ${ready.length === 1 ? 'payment' : 'payments'}?`,
+      `Add ${plural(ready.length, 'payment', 'payments')}?`,
       `They are saved with the categories shown on each card.${
         skipped > 0
-          ? ` ${skipped} ${skipped === 1 ? 'payment needs' : 'payments need'} a check first (possible duplicate, missing name, or money received back or returned).`
+          ? ` ${plural(skipped, 'payment needs', 'payments need')} a check first (possible duplicate, missing name, or money received back or returned).`
           : ''
       }`,
       [
@@ -298,7 +172,7 @@ export default function ReviewPaymentsScreen() {
               async () => {
                 const result = await addDetectedBatch(
                   db,
-                  ready.map((item) => ({ id: item.id, values: transactionFor(item) })),
+                  ready.map((item) => ({ id: item.id, values: transactionFor(item, choices, data) })),
                 );
                 added.push(...result.addedIds);
                 if (result.error) {
@@ -310,7 +184,7 @@ export default function ReviewPaymentsScreen() {
                   await undoAddDetected(db, id);
                 }
               },
-              `Added ${ready.length} ${ready.length === 1 ? 'payment' : 'payments'}`,
+              `Added ${plural(ready.length, 'payment', 'payments')}`,
               () => added.length > 0,
             );
           },
@@ -327,7 +201,7 @@ export default function ReviewPaymentsScreen() {
   }
 
   const duplicateCount = data.items.filter((item) => item.possibleDuplicate).length;
-  const addableCount = data.items.filter(isReady).length;
+  const addableCount = data.items.filter((item) => canAddInBatch(item, choices, data)).length;
 
   return (
     <View style={styles.screen}>
@@ -345,20 +219,15 @@ export default function ReviewPaymentsScreen() {
                 <Text style={styles.summary}>
                   {data.items.length} to review
                   {duplicateCount > 0
-                    ? ` · ${duplicateCount} possible ${duplicateCount === 1 ? 'duplicate' : 'duplicates'}`
+                    ? ` · ${plural(duplicateCount, 'possible duplicate', 'possible duplicates')}`
                     : ''}
                 </Text>
-                <Pressable accessibilityRole="button" onPress={() => router.push('/accounts')} hitSlop={8}>
+                <Pressable accessibilityRole="button" onPress={() => router.push('/bank-accounts')} hitSlop={8}>
                   <Text style={styles.link}>Bank accounts</Text>
                 </Pressable>
               </View>
               {addableCount > 1 ? (
-                <Button
-                  label={`Add all ${addableCount}`}
-                  variant="secondary"
-                  onPress={() => handleAddAll(data.items)}
-                  disabled={busy}
-                />
+                <Button label={`Add all ${addableCount}`} variant="secondary" onPress={handleAddAll} disabled={busy} />
               ) : null}
             </View>
           ) : null
@@ -371,19 +240,19 @@ export default function ReviewPaymentsScreen() {
             categoryId={categoryChoices[item.id] ?? item.suggestedCategoryId}
             onChangeCategory={(id) => setCategoryChoices((current) => ({ ...current, [item.id]: id }))}
             onCreateCategory={handleCreateCategory}
-            loanType={choiceOf(item)}
+            loanType={typeOf(item, choices, data)}
             shopAccounts={data.shopAccounts}
-            shopAccount={shopOf(item)}
+            shopAccount={shopOf(item, choices, data)}
             onChangeShopAccount={(id) => setShopChoices((current) => ({ ...current, [item.id]: id }))}
-            suggestionNote={suggestionNote(item)}
-            onChangeLoanType={(value) => setLoanChoices((current) => ({ ...current, [item.id]: value }))}
+            suggestionNote={suggestionNote(item, choices, data)}
+            onChangeLoanType={(value) => setTypeChoices((current) => ({ ...current, [item.id]: value }))}
             busy={busy}
             onAdd={() => handleAdd(item)}
             onEdit={() => handleEdit(item)}
             onIgnore={() => handleIgnore(item)}
           />
         )}
-        ItemSeparatorComponent={() => <View style={styles.separator} />}
+        ItemSeparatorComponent={Separator}
         ListEmptyComponent={
           <EmptyState title="All caught up" message="New payments from your bank SMS will appear here." />
         }
@@ -391,6 +260,14 @@ export default function ReviewPaymentsScreen() {
       <UndoBar action={undoAction} onUndo={handleUndo} onHide={hideUndo} />
     </View>
   );
+}
+
+/** What was added, for the Undo bar: "Payment to Shop", "Gave money", "Income" or "Expense". */
+function addedLabel(item, values) {
+  if (values.shopEntry) {
+    return `Payment to ${values.merchant}`;
+  }
+  return loanLabel(values.loanType) ?? (item.direction === 'credit' ? 'Income' : 'Expense');
 }
 
 const styles = StyleSheet.create({

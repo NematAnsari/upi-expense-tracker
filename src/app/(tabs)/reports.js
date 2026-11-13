@@ -2,7 +2,7 @@
 //   Month card: "Spent in November", the total and the change from last month
 //   on top; a ring of spending by category below, with each slice's name and %
 //   in two columns under it; then the money received.
-//   Where it went: every category with its colour dot, amount and %; tap one
+//   Where it went: every category with its color dot, amount and %; tap one
 //   to see its entries in History.
 //   Given & Taken: the two remaining totals as full-width lines (all time,
 //   never part of spending).
@@ -12,24 +12,27 @@ import { useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Amount } from '../../components/Amount';
-import { Card } from '../../components/Card';
-import { CategoryRing, ringSlices, shortPercent } from '../../components/CategoryRing';
-import { MonthSelector } from '../../components/MonthSelector';
-import { EmptyState, ErrorState, LoadingState } from '../../components/States';
-import { TextLink } from '../../components/TextLink';
+import { Amount } from '../../components/basics/Amount';
+import { Card } from '../../components/basics/Card';
+import { CategoryRing, ringSlices, shortPercent } from '../../components/sections/CategoryRing';
+import { MonthSelector } from '../../components/sections/MonthSelector';
+import { EmptyState, ErrorState, LoadingState } from '../../components/basics/ScreenStates';
+import { TextLink } from '../../components/basics/TextLink';
 import { chartOtherColor, colors, fontSize, spacing } from '../../constants/theme';
-import { getLoanBalances, getMonthlyReport } from '../../db/reports';
-import { BALANCE_TEXT } from '../../domain/loans';
+import { getMonthlyReport } from '../../db/reports';
+import { BALANCE_TEXT } from '../../domain/people';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
-import { formatMonthLabel, getMonthKey } from '../../utils/dates';
+import { formatMonthLabel, getMonthKey, MONTH_NAMES, parseMonthKey } from '../../utils/dates';
 import { formatINR, percentOf } from '../../utils/money';
+import { plural } from '../../utils/text';
+import { getPeopleBalances } from '../../db/people';
 
-function plural(count, one, many) {
-  return `${count} ${count === 1 ? one : many}`;
+/** "November" */
+function monthName(monthKey) {
+  return MONTH_NAMES[parseMonthKey(monthKey).month - 1];
 }
 
-/** A small round colour dot: the category's slice colour in the ring. */
+/** A small round color dot: the category's slice color in the ring. */
 function Dot({ color }) {
   return <View style={[styles.dot, { backgroundColor: color }]} />;
 }
@@ -37,7 +40,7 @@ function Dot({ color }) {
 /** "▲ ₹500.00 more than October" (red), "▼ ... less" (green) or a plain note. */
 function Comparison({ comparison }) {
   const { previousMonthKey, previousTotalPaise, changePaise } = comparison;
-  const month = formatMonthLabel(previousMonthKey).split(' ')[0];
+  const month = monthName(previousMonthKey);
   if (previousTotalPaise === 0) {
     return <Text style={styles.muted}>Nothing spent in {month} to compare</Text>;
   }
@@ -101,11 +104,11 @@ function CategoryLine({ category, color, percent, onPress }) {
 export default function ReportsScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
-  const [monthKey, setMonthKey] = useState(getMonthKey());
+  const [monthKey, setMonthKey] = useState(getMonthKey);
 
   const loader = useCallback(async () => {
-    const [monthly, people] = await Promise.all([getMonthlyReport(db, monthKey), getLoanBalances(db)]);
-    return { ...monthly, people };
+    const [monthly, balances] = await Promise.all([getMonthlyReport(db, monthKey), getPeopleBalances(db)]);
+    return { ...monthly, balances };
   }, [db, monthKey]);
   const { data: report, error, reload } = useFocusQuery(loader);
 
@@ -119,14 +122,14 @@ export default function ReportsScreen() {
 
   function renderMonth() {
     const slices = ringSlices(report.categories);
-    // The list uses the same colours as the ring; categories folded into
+    // The list uses the same colors as the ring; categories folded into
     // "Other categories" get its grey.
     const colorOf = (categoryId) => slices.find((slice) => slice.categoryId === categoryId)?.color ?? chartOtherColor;
     return (
       <>
         <Card>
           <View style={styles.headline}>
-            <Text style={styles.muted}>{`Spent in ${formatMonthLabel(monthKey).split(' ')[0]}`}</Text>
+            <Text style={styles.muted}>{`Spent in ${monthName(monthKey)}`}</Text>
             <Amount paise={report.totalPaise} direction="debit" size="xxl" />
             <Comparison comparison={report.comparison} />
           </View>
@@ -195,7 +198,7 @@ export default function ReportsScreen() {
           )}
 
           {/* Kept apart from the spending above: these are not spending or income. */}
-          {report.people.people.length > 0 ? (
+          {report.balances.people.length > 0 ? (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle} accessibilityRole="header">
@@ -206,15 +209,15 @@ export default function ReportsScreen() {
               {/* Full-width lines, so large amounts always fit next to their label. */}
               <Card>
                 <BalanceLine
-                  label={BALANCE_TEXT.owesYou}
-                  paise={report.people.owedToYouPaise}
+                  label={BALANCE_TEXT.toReceive}
+                  paise={report.balances.toReceivePaise}
                   direction="credit"
                   zeroText="Nothing to receive"
                 />
                 <View style={styles.divider}>
                   <BalanceLine
-                    label={BALANCE_TEXT.youOwe}
-                    paise={report.people.youOwePaise}
+                    label={BALANCE_TEXT.toReturn}
+                    paise={report.balances.toReturnPaise}
                     direction="debit"
                     zeroText="Nothing to return"
                   />

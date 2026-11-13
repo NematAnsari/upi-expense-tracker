@@ -1,15 +1,14 @@
-// Payments detected from notifications. Nothing here saves an expense on its
-// own: detected items wait as "pending" until you tap Add or Ignore.
+// The Review screen's side of bank payments: listing what waits, adding,
+// ignoring and undoing. Nothing is saved as an expense until you tap Add.
+// How messages are read in is in detectedCapture.js.
 
-import { INCOME, suggestCategoryName, UNCATEGORIZED } from '../domain/categorize.js';
-import { parsePaymentNotification } from '../domain/paymentParser.js';
-import { pickableCategoryId } from '../domain/transactionForm.js';
-import { findOrCreateAccount } from './accounts.js';
-import { createTransaction, insertSplitPayment } from './transactions.js';
-
-// Same amount, direction and account within this window might be one payment
-// reported twice. It is flagged for you to decide, never merged silently.
-const POSSIBLE_DUPLICATE_WINDOW_MS = 15 * 60 * 1000;
+import { INCOME, OTHER, UNCATEGORIZED } from '../constants/categories.js';
+import { suggestCategoryName } from '../domain/categorize.js';
+import { findCategory, pickableCategoryId } from '../domain/transactionForm.js';
+import { findPossibleOriginal } from './detectedCapture.js';
+import { listRememberedNames, rememberName } from './nameMemory.js';
+import { insertSplitPayment } from './splitPayments.js';
+import { createTransaction } from './transactions.js';
 
 const SELECT_DETECTED = `
   SELECT
@@ -31,245 +30,15 @@ const SELECT_DETECTED = `
   LEFT JOIN accounts a ON a.id = d.account_id
 `;
 
-// Apps that only re-show a bank SMS you already receive (so every payment
-// would appear twice). Their notifications are ignored automatically.
-const MIRROR_APPS = ['com.truecaller'];
-
-// `selfId` is the row being checked (null for a new one). Rows only compare
-// against EARLIER rows, so the first of a pair stays normal and the later one
-// is the one marked.
-
-async function isKnownReference(db, reference, amountPaise, selfId) {
-  const saved = await db.getFirstAsync(
-    `SELECT t.id FROM transactions t
-     WHERE t.reference = ? AND t.amount_paise = ?
-       AND t.id NOT IN (SELECT transaction_id FROM detected_payments WHERE id = ? AND transaction_id IS NOT NULL)
-     LIMIT 1`,
-    [reference, amountPaise, selfId ?? -1],
-  );
-  if (saved) {
-    return true;
-  }
-  // A split stores only its shares, so compare with the total of each split too.
-  const split = await db.getFirstAsync(
-    `SELECT t.split_group FROM transactions t
-     WHERE t.split_group IS NOT NULL AND t.reference = ?
-       AND t.split_group NOT IN (SELECT transaction_id FROM detected_payments WHERE id = ? AND transaction_id IS NOT NULL)
-     GROUP BY t.split_group HAVING SUM(t.amount_paise) = ?
-     LIMIT 1`,
-    [reference, selfId ?? -1, amountPaise],
-  );
-  if (split) {
-    return true;
-  }
-  const detected = await db.getFirstAsync(
-    `SELECT id FROM detected_payments
-     WHERE reference = ? AND amount_paise = ? AND id <> ?
-       AND (status = 'added' OR (status = 'pending' AND id < ?)) LIMIT 1`,
-    [reference, amountPaise, selfId ?? -1, selfId ?? Number.MAX_SAFE_INTEGER],
-  );
-  return Boolean(detected);
-}
-
-/**
- * Finds an earlier payment this one may repeat, or null. Returns what is
- * needed to describe it: { kind: 'detected' | 'saved', direction, amountPaise,
- * at, accountName, sourcePackage, status }.
- */
-async function findPossibleOriginal(db, { direction, amountPaise, reference }, accountId, postedAt, selfId) {
-  const from = postedAt - POSSIBLE_DUPLICATE_WINDOW_MS;
-  const to = postedAt + POSSIBLE_DUPLICATE_WINDOW_MS;
-  // Two different UPI references are always two different payments. So a
-  // match only counts when at least one side has no reference.
-  const ref = reference ?? null;
-  // A UPI app's notification often has no account, so an unknown account on
-  // either side still counts as a possible match.
-  const detected = await db.getFirstAsync(
-    `SELECT 'detected' AS kind, d.direction, d.amount_paise AS amountPaise, d.posted_at AS at,
-            a.nickname AS accountName, d.source_package AS sourcePackage, d.status
-     FROM detected_payments d
-     LEFT JOIN accounts a ON a.id = d.account_id
-     WHERE d.direction = ? AND d.amount_paise = ? AND d.posted_at BETWEEN ? AND ?
-       AND (d.account_id IS NULL OR ? IS NULL OR d.account_id = ?)
-       AND (d.reference IS NULL OR ? IS NULL)
-       AND d.status IN ('pending', 'added') AND d.id <> ?
-       AND (d.posted_at < ? OR (d.posted_at = ? AND d.id < ?))
-     ORDER BY d.posted_at
-     LIMIT 1`,
-    [
-      direction,
-      amountPaise,
-      from,
-      to,
-      accountId,
-      accountId,
-      ref,
-      selfId ?? -1,
-      postedAt,
-      postedAt,
-      selfId ?? Number.MAX_SAFE_INTEGER,
-    ],
-  );
-  if (detected) {
-    return detected;
-  }
-  const saved = await db.getFirstAsync(
-    `SELECT 'saved' AS kind, t.direction, t.amount_paise AS amountPaise, t.occurred_at AS at,
-            a.nickname AS accountName, NULL AS sourcePackage, 'added' AS status
-     FROM transactions t
-     LEFT JOIN accounts a ON a.id = t.account_id
-     WHERE t.direction = ? AND t.amount_paise = ? AND t.occurred_at BETWEEN ? AND ?
-       AND (t.reference IS NULL OR ? IS NULL)
-       AND t.id NOT IN (SELECT transaction_id FROM detected_payments WHERE id = ? AND transaction_id IS NOT NULL)
-     LIMIT 1`,
-    [direction, amountPaise, from, to, ref, selfId ?? -1],
-  );
-  if (saved) {
-    return saved;
-  }
-  // A split payment is saved as its shares (say ₹125 and ₹125), but the bank
-  // reports the whole ₹250. So compare with the total of each split too.
-  return db.getFirstAsync(
-    `SELECT 'saved' AS kind, t.direction, SUM(t.amount_paise) AS amountPaise, MIN(t.occurred_at) AS at,
-            a.nickname AS accountName, NULL AS sourcePackage, 'added' AS status
-     FROM transactions t
-     LEFT JOIN accounts a ON a.id = t.account_id
-     WHERE t.split_group IS NOT NULL AND t.direction = ? AND t.occurred_at BETWEEN ? AND ?
-       AND (t.reference IS NULL OR ? IS NULL)
-       AND t.split_group NOT IN (SELECT transaction_id FROM detected_payments WHERE id = ? AND transaction_id IS NOT NULL)
-     GROUP BY t.split_group HAVING SUM(t.amount_paise) = ?
-     LIMIT 1`,
-    [direction, from, to, ref, selfId ?? -1, amountPaise],
-  );
-}
-
-async function looksLikeDuplicate(db, parsed, accountId, postedAt, selfId) {
-  return Boolean(await findPossibleOriginal(db, parsed, accountId, postedAt, selfId));
-}
-
-/** Decides what a captured notification is. Used for new items and to re-check waiting ones. */
-async function classify(db, item, selfId) {
-  if (MIRROR_APPS.includes(item.packageName)) {
-    return { status: 'ignored', parsed: null, accountId: null, possibleDuplicate: 0 };
-  }
-  const parsed = parsePaymentNotification(item);
-  if (!parsed) {
-    return { status: 'unrecognized', parsed: null, accountId: null, possibleDuplicate: 0 };
-  }
-
-  const accountId = await findOrCreateAccount(db, {
-    bankName: parsed.bankName,
-    bankShort: parsed.bankShort,
-    last4: parsed.accountLast4,
-  });
-  if (parsed.reference && (await isKnownReference(db, parsed.reference, parsed.amountPaise, selfId))) {
-    return { status: 'duplicate', parsed, accountId, possibleDuplicate: 0 };
-  }
-  const possibleDuplicate = (await looksLikeDuplicate(db, parsed, accountId, item.postedAt, selfId)) ? 1 : 0;
-  return { status: 'pending', parsed, accountId, possibleDuplicate };
-}
-
-async function saveCaptured(db, item) {
-  const exists = await db.getFirstAsync('SELECT id FROM detected_payments WHERE capture_id = ?', [item.id]);
-  if (exists) {
-    return;
-  }
-  const { status, parsed, accountId, possibleDuplicate } = await classify(db, item, null);
-  await db.runAsync(
-    `INSERT INTO detected_payments
-      (capture_id, source_package, title, raw_text, posted_at, created_at, status,
-       direction, amount_paise, account_id, counterparty, reference, possible_duplicate)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      item.id,
-      item.packageName ?? null,
-      item.title ?? null,
-      item.text ?? '',
-      item.postedAt,
-      Date.now(),
-      status,
-      parsed?.direction ?? null,
-      parsed?.amountPaise ?? null,
-      accountId,
-      parsed?.counterparty ?? null,
-      parsed?.reference ?? null,
-      possibleDuplicate,
-    ],
-  );
-}
-
-/**
- * Re-reads items you have not acted on yet, so improvements to the reader
- * also fix payments already waiting in your list. Added and ignored items are
- * never changed.
- */
-async function recheckWaitingItems(db) {
-  const rows = await db.getAllAsync(
-    `SELECT id, source_package AS packageName, title, raw_text AS text, posted_at AS postedAt
-     FROM detected_payments WHERE status IN ('pending', 'unrecognized')
-     ORDER BY posted_at, id`,
-  );
-  for (const row of rows) {
-    const { status, parsed, accountId, possibleDuplicate } = await classify(db, row, row.id);
-    await db.runAsync(
-      `UPDATE detected_payments SET
-         status = ?, direction = ?, amount_paise = ?, account_id = ?, counterparty = ?, reference = ?,
-         possible_duplicate = ?
-       WHERE id = ?`,
-      [
-        status,
-        parsed?.direction ?? null,
-        parsed?.amountPaise ?? null,
-        accountId,
-        parsed?.counterparty ?? null,
-        parsed?.reference ?? null,
-        possibleDuplicate,
-        row.id,
-      ],
-    );
-  }
-}
-
-/**
- * Moves captured notifications from the native queue into the database.
- * `source` is the native module (or a fake one in tests). An item is removed
- * from the queue only after it is safely saved, so nothing is lost if the app
- * closes halfway. Returns how many items were processed.
- */
-export async function syncCapturedNotifications(db, source) {
-  const captured = await source.getCapturedNotifications();
-  const saved = [];
-  for (const item of captured) {
-    try {
-      await db.withExclusiveTransactionAsync(async (txn) => {
-        await saveCaptured(txn, item);
-      });
-      saved.push(item.id);
-    } catch (error) {
-      // Leave it in the queue to retry next time.
-      console.error('Could not save a captured notification', error);
-    }
-  }
-  await source.removeCapturedNotifications(saved);
-  try {
-    await db.withExclusiveTransactionAsync(async (txn) => {
-      await recheckWaitingItems(txn);
-    });
-  } catch (error) {
-    console.error('Could not re-check waiting payments', error);
-  }
-  return saved.length;
-}
-
 export async function countPendingDetected(db) {
   const row = await db.getFirstAsync("SELECT COUNT(*) AS count FROM detected_payments WHERE status = 'pending'");
   return row?.count ?? 0;
 }
 
 /**
- * The category to suggest: what you used before for this name, else a keyword
- * match. Money given or taken is left out: it is saved under the hidden
- * "Loans" category, which must never be suggested for an expense.
+ * The category to suggest: the one last used for this name, else a keyword
+ * match. Money given or taken is skipped: its Loans category must never be
+ * suggested for an expense.
  */
 async function suggestCategoryId(db, detected, categories) {
   if (detected.direction === 'debit' && detected.counterparty) {
@@ -284,184 +53,76 @@ async function suggestCategoryId(db, detected, categories) {
     }
   }
   const name = suggestCategoryName(detected.counterparty, detected.direction);
-  const byName = (wanted) => categories.find((category) => category.name.toLowerCase() === wanted.toLowerCase());
-  return (
-    (byName(name) ?? byName(detected.direction === 'credit' ? INCOME : UNCATEGORIZED) ?? byName('Other'))?.id ?? null
-  );
+  const fallback = detected.direction === 'credit' ? INCOME : UNCATEGORIZED;
+  const category =
+    findCategory(categories, name) ?? findCategory(categories, fallback) ?? findCategory(categories, OTHER);
+  return category?.id ?? null;
 }
 
-/** What you saved last time for this bank name, or null. See rememberName. */
-async function getNameMemory(db, bankName) {
-  if (!bankName) {
-    return null;
-  }
-  return db.getFirstAsync(
-    `SELECT merchant, category_id AS categoryId, loan_type AS loanType, shop_account_id AS shopAccountId
-     FROM name_memory WHERE bank_name = ?`,
-    [bankName.trim()],
-  );
-}
-
-/**
- * Remembers what you saved for a name as the bank writes it, so the next
- * payment with that name comes in already filled: your spelling ("Rahul" for
- * "RAHUL KUMAR S"), the category (expenses and income), and whether it was
- * money given or taken. Money received back or returned keeps what was
- * remembered before, since those are suggested from the remaining amount.
- * A payment to a shop account remembers that account.
- */
-async function rememberName(db, bankName, values) {
-  const key = bankName?.trim();
-  if (!key) {
-    return;
-  }
-  const before = await getNameMemory(db, key);
-  const isReturn = values.loanType === 'lent_repaid' || values.loanType === 'borrowed_repaid';
-  const loanType = isReturn ? (before?.loanType ?? null) : (values.loanType ?? null);
-  const categoryId = values.loanType ? (before?.categoryId ?? null) : values.categoryId;
-  const shopAccountId = values.shopEntry === 'payment' ? values.shopAccountId : null;
-  await db.runAsync(
-    `INSERT INTO name_memory (bank_name, merchant, category_id, loan_type, shop_account_id, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT (bank_name) DO UPDATE SET
-       merchant = excluded.merchant, category_id = excluded.category_id, loan_type = excluded.loan_type,
-       shop_account_id = excluded.shop_account_id, updated_at = excluded.updated_at`,
-    [key, values.merchant ?? null, categoryId, loanType, shopAccountId, Date.now()],
-  );
-}
-
-/**
- * Pending items, newest first, each with a suggested category and, for
- * possible duplicates, the earlier payment it may repeat (`original`).
- * A name seen before comes back as you saved it: `counterparty` is your
- * spelling, `bankName` the bank's, and `rememberedLoanType` is 'lent' or
- * 'borrowed' when you saved this name as money given or taken.
- * `rememberedShopAccountId`: the shop account you paid from this name last time.
- */
-export async function listPendingDetected(db, categories) {
-  const rows = await db.getAllAsync(`${SELECT_DETECTED} WHERE d.status = 'pending' ORDER BY d.posted_at DESC`);
-  const withSuggestions = [];
-  for (const row of rows) {
-    const memory = await getNameMemory(db, row.counterparty);
-    // A remembered "Loans" category is not used: you cannot pick it for an expense.
-    const rememberedCategoryId = pickableCategoryId(categories, memory?.categoryId);
-    const suggestedCategoryId = rememberedCategoryId ?? (await suggestCategoryId(db, row, categories));
-    const suggested = categories.find((category) => category.id === suggestedCategoryId);
-    const original = row.possibleDuplicate
-      ? await findPossibleOriginal(db, row, row.accountId, row.postedAt, row.id)
-      : null;
-    const rememberedLoanType = isValidRemembered(memory?.loanType, row.direction) ? memory.loanType : null;
-    withSuggestions.push({
-      ...row,
-      bankName: row.counterparty,
-      counterparty: memory?.merchant || row.counterparty,
-      rememberedLoanType,
-      rememberedShopAccountId: row.direction === 'debit' ? (memory?.shopAccountId ?? null) : null,
-      suggestedCategoryId,
-      suggestedCategoryName: suggested?.name ?? null,
-      original,
-    });
-  }
-  return withSuggestions;
-}
-
-/** Money given is money out and money taken is money in, so only a matching direction is used. */
-function isValidRemembered(loanType, direction) {
+/** A remembered type is used only when it fits: I gave is money out, I took is money in. */
+function rememberedTypeFits(loanType, direction) {
   return (loanType === 'lent' && direction === 'debit') || (loanType === 'borrowed' && direction === 'credit');
 }
 
 /**
- * Undo an Add: deletes the saved transaction and puts the item back in the
- * review list. Only works while the transaction still came from this item.
- * An entry you changed after adding it is kept: Undo must not throw away an edit.
+ * A waiting payment with what its Review card needs: the suggested category,
+ * the remembered name and type, and for a possible duplicate the earlier
+ * payment it looks like (`original`). `counterparty` is your spelling of the
+ * name and `bankName` the bank's.
  */
-export async function undoAddDetected(db, detectedId) {
-  await db.withExclusiveTransactionAsync(async (txn) => {
-    const row = await txn.getFirstAsync(
-      'SELECT status, transaction_id AS transactionId FROM detected_payments WHERE id = ?',
-      [detectedId],
-    );
-    if (row?.status !== 'added') {
-      throw new Error('This payment can no longer be undone.');
-    }
-    if (row.transactionId != null) {
-      const edited = await txn.getFirstAsync(
-        'SELECT id FROM transactions WHERE (id = ? OR split_group = ?) AND updated_at <> created_at LIMIT 1',
-        [row.transactionId, row.transactionId],
-      );
-      if (edited) {
-        throw new Error(
-          'You changed this entry after adding it, so it was kept. Delete it from the list if you no longer want it.',
-        );
-      }
-      // A split payment removes all its parts.
-      await txn.runAsync("DELETE FROM transactions WHERE (id = ? OR split_group = ?) AND source = 'notification'", [
-        row.transactionId,
-        row.transactionId,
-      ]);
-    }
-    await txn.runAsync("UPDATE detected_payments SET status = 'pending', transaction_id = NULL WHERE id = ?", [
-      detectedId,
-    ]);
-  });
+async function withSuggestions(db, row, categories, remembered) {
+  const memory = remembered.get(
+    String(row.counterparty ?? '')
+      .trim()
+      .toLowerCase(),
+  );
+  // A remembered Loans category is not used: you cannot pick it for an expense.
+  const suggestedCategoryId =
+    pickableCategoryId(categories, memory?.categoryId) ?? (await suggestCategoryId(db, row, categories));
+  const original = row.possibleDuplicate
+    ? await findPossibleOriginal(db, row, row.accountId, row.postedAt, row.id)
+    : null;
+  return {
+    ...row,
+    bankName: row.counterparty,
+    counterparty: memory?.merchant || row.counterparty,
+    rememberedLoanType: rememberedTypeFits(memory?.loanType, row.direction) ? memory.loanType : null,
+    rememberedShopAccountId: row.direction === 'debit' ? (memory?.shopAccountId ?? null) : null,
+    suggestedCategoryId,
+    suggestedCategoryName: categories.find((category) => category.id === suggestedCategoryId)?.name ?? null,
+    original,
+  };
 }
 
-/**
- * Adds several detected payments one by one: entries is [{ id, values }].
- * Stops at the first failure and reports it instead of throwing, so the ones
- * already added are known and can be undone. Returns { addedIds, error }.
- */
-export async function addDetectedBatch(db, entries) {
-  const addedIds = [];
-  for (const { id, values } of entries) {
-    try {
-      await addDetectedAsTransaction(db, id, values);
-      addedIds.push(id);
-    } catch (error) {
-      return { addedIds, error };
-    }
+/** Waiting payments, newest first, ready for the Review cards (see withSuggestions). */
+export async function listPendingDetected(db, categories) {
+  const [rows, remembered] = await Promise.all([
+    db.getAllAsync(`${SELECT_DETECTED} WHERE d.status = 'pending' ORDER BY d.posted_at DESC`),
+    listRememberedNames(db),
+  ]);
+  const items = [];
+  for (const row of rows) {
+    items.push(await withSuggestions(db, row, categories, remembered));
   }
-  return { addedIds, error: null };
+  return items;
 }
 
-/** When the newest bank message or payment notification was captured (ms), or null if none ever was. */
-export async function getLastDetectedAt(db) {
-  const row = await db.getFirstAsync('SELECT MAX(posted_at) AS lastAt FROM detected_payments');
-  return row?.lastAt ?? null;
+/** One waiting payment, ready for its card, or null when it was already added or ignored. */
+export async function getPendingDetected(db, id, categories) {
+  const row = await db.getFirstAsync(`${SELECT_DETECTED} WHERE d.status = 'pending' AND d.id = ?`, [id]);
+  return row ? withSuggestions(db, row, categories, await listRememberedNames(db)) : null;
 }
 
-/** Recent captures of every status, for the Payment Detection screen. */
+/** Recent captures of every status, for the Payment detection screen. */
 export async function listRecentDetected(db, limit = 50) {
   return db.getAllAsync(`${SELECT_DETECTED} ORDER BY d.posted_at DESC LIMIT ?`, [limit]);
 }
 
 /**
- * The transaction a detected payment becomes when you tap Add. loanType is
- * set when you marked it as money lent, borrowed or paid back.
- */
-export function detectedToTransaction(detected, categoryId, loanType = null) {
-  return {
-    amountPaise: detected.amountPaise,
-    direction: detected.direction,
-    loanType,
-    accountId: detected.accountId,
-    purpose: null,
-    categoryId,
-    occurredAt: detected.postedAt,
-    paymentMethod: 'UPI',
-    merchant: detected.counterparty,
-    reference: detected.reference,
-    notes: null,
-    source: 'notification',
-  };
-}
-
-/**
- * Saves a detected payment as a transaction and marks it added. What you
- * saved is remembered for the bank's name (see rememberName).
- * Fails (without saving) if it was already added or ignored, so a double tap
- * cannot create two expenses.
- * split: { parts, loansCategoryId } to save it as a split payment (see createSplitPayment).
+ * Saves a bank payment as an entry and marks it added; what you chose is
+ * remembered for the bank's name. Fails without saving if it was already
+ * handled, so a double tap cannot add it twice.
+ * split: { parts, loansCategoryId } to save it as a split payment.
  */
 export async function addDetectedAsTransaction(db, detectedId, values, split = null) {
   let transactionId = null;
@@ -486,29 +147,67 @@ export async function addDetectedAsTransaction(db, detectedId, values, split = n
 }
 
 /**
- * After you edit an entry that came from a bank SMS, remember the corrected
- * name, category and type for that bank name, as Add does. Does nothing for
- * entries you typed in yourself.
+ * Adds payments one by one ([{ id, values }]). Stops at the first failure and
+ * returns it instead of throwing, so what was added can still be undone.
+ * Returns { addedIds, error }.
  */
-export async function rememberEditedName(db, transactionId, values) {
-  const row = await db.getFirstAsync(
-    "SELECT counterparty FROM detected_payments WHERE transaction_id = ? AND status = 'added'",
-    [transactionId],
-  );
-  if (row?.counterparty) {
-    await rememberName(db, row.counterparty, values);
+export async function addDetectedBatch(db, entries) {
+  const addedIds = [];
+  for (const { id, values } of entries) {
+    try {
+      await addDetectedAsTransaction(db, id, values);
+      addedIds.push(id);
+    } catch (error) {
+      return { addedIds, error };
+    }
   }
+  return { addedIds, error: null };
 }
 
-/** Undo an Ignore: the item goes back to the review list (and is re-checked there). */
-export async function restoreDetected(db, detectedId) {
-  await db.runAsync("UPDATE detected_payments SET status = 'pending' WHERE id = ? AND status = 'ignored'", [
-    detectedId,
-  ]);
+/**
+ * Undoes an Add: deletes the entry (all parts of a split) and puts the payment
+ * back on Review. An entry you changed after adding it is kept, so Undo never
+ * throws away an edit.
+ */
+export async function undoAddDetected(db, detectedId) {
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    const row = await txn.getFirstAsync(
+      'SELECT status, transaction_id AS transactionId FROM detected_payments WHERE id = ?',
+      [detectedId],
+    );
+    if (row?.status !== 'added') {
+      throw new Error('This payment can no longer be undone.');
+    }
+    if (row.transactionId != null) {
+      const edited = await txn.getFirstAsync(
+        'SELECT id FROM transactions WHERE (id = ? OR split_group = ?) AND updated_at <> created_at LIMIT 1',
+        [row.transactionId, row.transactionId],
+      );
+      if (edited) {
+        throw new Error(
+          'You changed this entry after adding it, so it was kept. Delete it from the list if you no longer want it.',
+        );
+      }
+      await txn.runAsync("DELETE FROM transactions WHERE (id = ? OR split_group = ?) AND source = 'notification'", [
+        row.transactionId,
+        row.transactionId,
+      ]);
+    }
+    await txn.runAsync("UPDATE detected_payments SET status = 'pending', transaction_id = NULL WHERE id = ?", [
+      detectedId,
+    ]);
+  });
 }
 
 export async function ignoreDetected(db, detectedId) {
   await db.runAsync("UPDATE detected_payments SET status = 'ignored' WHERE id = ? AND status = 'pending'", [
+    detectedId,
+  ]);
+}
+
+/** Undoes an Ignore: the payment goes back on Review. */
+export async function unignoreDetected(db, detectedId) {
+  await db.runAsync("UPDATE detected_payments SET status = 'pending' WHERE id = ? AND status = 'ignored'", [
     detectedId,
   ]);
 }

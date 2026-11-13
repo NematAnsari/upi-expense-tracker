@@ -1,11 +1,8 @@
-// Bottom tab bar. The "(tabs)" folder name is in parentheses so it groups
-// screens without adding "/tabs" to their URLs.
-// Each tab has a thin outline icon (TabIcon, drawn with react-native-svg) with
-// a small label under it. The selected tab uses the brand colour, the rest grey.
+// Bottom tabs. '(tabs)' groups screens without changing their URLs.
 
 import { Tabs } from 'expo-router';
 import { Alert, Pressable, StyleSheet, Text } from 'react-native';
-import { TabIcon } from '../../components/TabIcon';
+import { TabIcon } from '../../components/icons/TabIcon';
 import { colors, fontSize, spacing } from '../../constants/theme';
 
 /** The ⓘ on the Given & Taken title bar: explains why these totals are kept apart. */
@@ -28,7 +25,7 @@ function GivenTakenInfo() {
   );
 }
 
-/** tabBarIcon for a tab: React Navigation passes the colour for selected / not selected. */
+/** tabBarIcon for a tab: React Navigation passes the color for selected / not selected. */
 function iconFor(name) {
   const Icon = ({ color }) => <TabIcon name={name} color={color} size={22} />;
   Icon.displayName = `TabIcon(${name})`;

@@ -1,11 +1,6 @@
-// The background side of the automatic backup. Android decides when
-// background work runs (usually at night, while the phone is idle or
-// charging), so this cannot promise an exact time, and a phone maker's battery
-// saver can skip it. Opening the app catches up (see AutoBackupOnOpen).
-//
-// The task is defined here at the top level, as expo-task-manager requires:
-// when Android starts the app only to run the task, no screen is loaded, so
-// this file is imported from the app's entry file (index.js).
+// The nightly background run of the automatic backup. Android picks the time
+// and may skip it; opening the app catches up. Defined at the top level and
+// imported from index.js, as expo-task-manager needs it without any screen.
 
 import * as BackgroundTask from 'expo-background-task';
 import * as SQLite from 'expo-sqlite';

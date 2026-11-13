@@ -6,51 +6,33 @@ import { useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Path, Rect } from 'react-native-svg';
-import { useAppLock } from '../../components/AppLock';
-import { ICONS, OutlineIcon } from '../../components/icons';
+import { useAppLock } from '../../components/wrappers/AppLockProvider';
+import { ICONS, OutlineIcon } from '../../components/icons/icons';
 import { colors, fontSize, radius, spacing } from '../../constants/theme';
 import { countPendingDetected } from '../../db/detected';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
 
-// Same thin outline style as the rest of the app's icons (see components/icons.js).
-const STROKE = { fill: 'none', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' };
-const DRAW = {
-  // An envelope: a message waiting to be looked at.
-  review: (c) => <Path d="M4 6h16v12H4zM4 7l8 6 8-6" stroke={c} {...STROKE} />,
+// Each row's icon (shared drawings from icons.js).
+const MENU_ICONS = {
+  review: ICONS.envelope,
   history: ICONS.oldest,
-  // A cup with steam.
-  shops: (c) => (
-    <Path
-      d="M5 8h11v6a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V8zM16 9h1.5a2.5 2.5 0 0 1 0 5H16M8 3v2M12 3v2"
-      stroke={c}
-      {...STROKE}
-    />
-  ),
+  shops: ICONS.cup,
   banks: ICONS.bank,
-  // A bell.
-  detection: (c) => <Path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2h16l-2-2zM10 21h4" stroke={c} {...STROKE} />,
-  // A tray with a down arrow.
-  backup: (c) => <Path d="M12 4v10M8 10l4 4 4-4M5 19h14" stroke={c} {...STROKE} />,
-  // A padlock.
-  lock: (c) => (
-    <>
-      <Rect x={5} y={10.5} width={14} height={10} rx={2} stroke={c} {...STROKE} />
-      <Path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" stroke={c} {...STROKE} />
-    </>
-  ),
+  detection: ICONS.bell,
+  backup: ICONS.download,
+  lock: ICONS.lock,
 };
 
 // The rows under the Review banner, in order.
-const ROWS = [
+const MENU_ROWS = [
   { key: 'history', title: 'History', subtitle: 'All expenses and income, with search and filters', route: '/history' },
   { key: 'shops', title: 'Shop accounts', subtitle: 'Take now, pay later, like tea paid monthly', route: '/shops' },
-  { key: 'banks', title: 'Bank accounts', subtitle: 'Name your accounts', route: '/accounts' },
+  { key: 'banks', title: 'Bank accounts', subtitle: 'Name your accounts', route: '/bank-accounts' },
   {
     key: 'detection',
     title: 'Payment detection',
     subtitle: 'Notification access, battery, alerts',
-    route: '/auto-detect',
+    route: '/payment-detection',
   },
   {
     key: 'backup',
@@ -70,8 +52,8 @@ export default function MoreScreen() {
 
   const { enabled: lockOn } = useAppLock();
   const lockSubtitle = lockOn ? 'On: asks for your fingerprint or phone PIN' : 'Off: open the app without unlocking';
-  const waiting = data?.pendingCount ?? 0;
-  const reviewSubtitle = waiting > 0 ? `${waiting} waiting for you` : 'All caught up';
+  const pendingCount = data?.pendingCount ?? 0;
+  const reviewSubtitle = pendingCount > 0 ? `${pendingCount} waiting for you` : 'All caught up';
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -82,7 +64,7 @@ export default function MoreScreen() {
         style={({ pressed }) => [styles.featured, pressed && styles.pressed]}
       >
         <View style={styles.featuredIcon}>
-          <OutlineIcon draw={DRAW.review} color={colors.onPrimary} size={22} />
+          <OutlineIcon draw={MENU_ICONS.review} color={colors.onPrimary} size={22} />
         </View>
         <View style={styles.main}>
           <Text style={styles.featuredTitle}>Review payments</Text>
@@ -92,7 +74,7 @@ export default function MoreScreen() {
       </Pressable>
 
       <View style={styles.card}>
-        {ROWS.map((row, index) => (
+        {MENU_ROWS.map((row, index) => (
           <View key={row.key}>
             {/* The line starts at the text, not under the icon. */}
             {index > 0 ? <View style={styles.divider} /> : null}
@@ -102,8 +84,8 @@ export default function MoreScreen() {
               onPress={() => router.push(row.route)}
               style={({ pressed }) => [styles.row, pressed && styles.pressed]}
             >
-              <View style={styles.glyph}>
-                <OutlineIcon draw={DRAW[row.key]} color={colors.primary} size={18} />
+              <View style={styles.iconCircle}>
+                <OutlineIcon draw={MENU_ICONS[row.key]} color={colors.primary} size={18} />
               </View>
               <View style={styles.main}>
                 <Text style={styles.title}>{row.title}</Text>
@@ -151,7 +133,7 @@ const styles = StyleSheet.create({
   },
   divider: { height: StyleSheet.hairlineWidth, marginLeft: 36 + spacing.md, backgroundColor: colors.border },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 60, paddingVertical: spacing.sm },
-  glyph: {
+  iconCircle: {
     width: 36,
     height: 36,
     borderRadius: radius.pill,

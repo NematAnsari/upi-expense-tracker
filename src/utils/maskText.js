@@ -4,7 +4,8 @@
 // the masked text yourself before sharing it.
 
 const AMOUNT = /(₹|\bRs\.?|\bINR)\s*[\d,]+(\.\d{1,2})?/gi;
-const UPI_ID = /[\w.-]+@[a-z][a-z0-9]*/gi;
+// "name@bank". Also used by banks.js.
+export const UPI_ID = /[\w.-]+@[a-z][a-z0-9]*/gi;
 const LONG_NUMBER = /\d{4,}/g;
 
 export function maskSensitiveText(text) {

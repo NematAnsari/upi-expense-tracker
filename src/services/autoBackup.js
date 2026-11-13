@@ -1,12 +1,12 @@
 // Automatic backup: once a day a backup file is written into a folder you
 // picked once (for example one that Google Drive keeps in sync). It runs at
 // night when Android allows background work (see autoBackupTask.js), and
-// when you open the app if that night was missed. The newest 7 files stay.
+// when you open the app if that night was missed. The newest AUTO_BACKUPS_KEPT files stay.
 
 import { Directory } from 'expo-file-system';
 import { buildBackup, markBackupSaved } from '../db/backup';
-import { DEVICE_KEYS, getAutoBackupSettings, setDeviceSetting } from '../db/deviceSettings';
-import { autoBackupFileName, autoBackupsToRemove, isAutoBackupDue } from '../domain/autoBackup';
+import { PHONE_KEYS, getAutoBackupSettings, setPhoneSetting } from '../db/phoneSettings';
+import { autoBackupFileName, autoBackupsToRemove, isAutoBackupDue } from '../domain/autoBackupSchedule';
 
 /**
  * Opens Android's folder picker. Returns the folder's address to save, or
@@ -25,7 +25,7 @@ export async function pickBackupFolder() {
 }
 
 /** The folder's last part, to show which one is used: "Backups". */
-export function folderLabel(uri) {
+export function folderName(uri) {
   if (!uri) {
     return null;
   }
@@ -36,39 +36,41 @@ export function folderLabel(uri) {
 
 /**
  * Writes today's backup file into the folder and removes automatic backups
- * older than the newest 7. Records the time, or the reason it failed.
+ * beyond the newest AUTO_BACKUPS_KEPT. Records the time, or the reason it failed.
  * Returns { ok, error }.
  */
-export async function runAutoBackup(db, folderUri, now = Date.now()) {
+export async function writeAutoBackup(db, folderUri, now = Date.now()) {
   try {
     const folder = new Directory(folderUri);
     const name = autoBackupFileName(now);
-    const existing = folder.list();
     // The same day again: replace that day's file.
-    for (const item of existing) {
+    const others = [];
+    for (const item of folder.list()) {
       if (item.name === name) {
         item.delete();
+      } else {
+        others.push(item);
       }
     }
     const file = folder.createFile(name, 'application/json');
     file.write(JSON.stringify(await buildBackup(db, now)));
 
-    const names = folder.list().map((item) => item.name);
-    const remove = autoBackupsToRemove(names);
-    for (const item of folder.list()) {
+    const items = [...others, file];
+    const remove = autoBackupsToRemove(items.map((item) => item.name));
+    for (const item of items) {
       if (remove.includes(item.name)) {
         item.delete();
       }
     }
-    await setDeviceSetting(db, DEVICE_KEYS.autoBackupLastAt, now);
-    await setDeviceSetting(db, DEVICE_KEYS.autoBackupError, '');
+    await setPhoneSetting(db, PHONE_KEYS.autoBackupLastAt, now);
+    await setPhoneSetting(db, PHONE_KEYS.autoBackupError, '');
     // A file really was saved, so the "back up" reminder can rest.
     await markBackupSaved(db, now);
     return { ok: true, error: null };
   } catch (error) {
     console.error('Automatic backup failed', error);
     const message = error?.message || 'The folder could not be written to.';
-    await setDeviceSetting(db, DEVICE_KEYS.autoBackupError, message).catch(() => {});
+    await setPhoneSetting(db, PHONE_KEYS.autoBackupError, message).catch(() => {});
     return { ok: false, error: message };
   }
 }
@@ -83,7 +85,7 @@ export async function runAutoBackupIfDue(db, now = Date.now()) {
     if (!settings.on || !settings.folder || !isAutoBackupDue(settings.lastAt, now)) {
       return 'skipped';
     }
-    const result = await runAutoBackup(db, settings.folder, now);
+    const result = await writeAutoBackup(db, settings.folder, now);
     return result.ok ? 'done' : 'failed';
   } catch (error) {
     console.error('Automatic backup check failed', error);

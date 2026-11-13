@@ -1,0 +1,140 @@
+// Bank Accounts: the accounts found in your bank SMS, plus any you add by hand.
+// Tap one to give it a friendly name; "+ Add account" adds a new one.
+
+import { useSQLiteContext } from 'expo-sqlite';
+import { useCallback, useState } from 'react';
+import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
+import { AccountRow } from '../components/rows/AccountRow';
+import { Button } from '../components/basics/Button';
+import { EmptyState, ErrorState, LoadingState } from '../components/basics/ScreenStates';
+import { TextField } from '../components/basics/TextField';
+import { colors, fontSize, spacing } from '../constants/theme';
+import { createAccount, listAccounts, renameAccount } from '../db/accounts';
+import { MAX_ACCOUNT_NAME_LENGTH } from '../domain/validation';
+import { useFocusQuery } from '../hooks/useFocusQuery';
+import { showError, showMessage } from '../utils/notify';
+
+// Lets the list scroll the box you are typing in (a nickname or a new account) above the keyboard.
+const renderKeyboardAware = (props) => <KeyboardAwareScrollView {...props} bottomOffset={spacing.xl} />;
+
+function Separator() {
+  return <View style={styles.separator} />;
+}
+
+export default function BankAccountsScreen() {
+  const db = useSQLiteContext();
+  const loader = useCallback(() => listAccounts(db), [db]);
+  const { data: accounts, error, reload } = useFocusQuery(loader);
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [addError, setAddError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  async function handleRename(account, nickname) {
+    try {
+      await renameAccount(db, account.id, nickname);
+      showMessage('Account renamed');
+      reload();
+    } catch (renameError) {
+      showError('Could not rename', renameError);
+    }
+  }
+
+  function closeAdd() {
+    setAdding(false);
+    setNewName('');
+    setAddError(null);
+  }
+
+  async function handleAdd() {
+    if (saving) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await createAccount(db, newName);
+      showMessage('Account added');
+      closeAdd();
+      reload();
+    } catch (createError) {
+      setAddError(createError.message || 'Could not add the account.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (error) {
+    return <ErrorState onRetry={reload} />;
+  }
+  if (!accounts) {
+    return <LoadingState />;
+  }
+
+  // A plain element (not a component made here), so the text box keeps focus while typing.
+  const header = (
+    <View style={styles.header}>
+      <Text style={styles.note}>
+        Accounts from your bank SMS are added automatically; only the bank name and the last 4 digits are stored. You
+        can also add one yourself.
+      </Text>
+      {adding ? (
+        <View style={styles.addBlock}>
+          <TextField
+            value={newName}
+            onChangeText={(text) => {
+              setNewName(text);
+              setAddError(null);
+            }}
+            placeholder="Account name, e.g. SBI Salary"
+            maxLength={MAX_ACCOUNT_NAME_LENGTH}
+            autoFocus
+            returnKeyType="done"
+            onSubmitEditing={handleAdd}
+            error={addError}
+            accessibilityLabel="New account name"
+          />
+          {addError ? <Text style={styles.error}>{addError}</Text> : null}
+          <View style={styles.addButtons}>
+            <Button label="Cancel" variant="secondary" onPress={closeAdd} style={styles.flex} />
+            <Button label="Add" onPress={handleAdd} loading={saving} style={styles.flex} />
+          </View>
+        </View>
+      ) : (
+        <Button label="+ Add account" variant="secondary" onPress={() => setAdding(true)} />
+      )}
+    </View>
+  );
+
+  return (
+    <FlatList
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      data={accounts}
+      keyExtractor={(account) => String(account.id)}
+      keyboardShouldPersistTaps="handled"
+      renderScrollComponent={renderKeyboardAware}
+      ListHeaderComponent={header}
+      ItemSeparatorComponent={Separator}
+      renderItem={({ item }) => <AccountRow account={item} onSave={handleRename} />}
+      ListEmptyComponent={
+        <EmptyState
+          title="No accounts yet"
+          message="They appear after the first bank SMS is detected, or add one above."
+        />
+      }
+    />
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.background },
+  content: { padding: spacing.lg, paddingBottom: spacing.xl },
+  flex: { flex: 1 },
+  header: { gap: spacing.md, marginBottom: spacing.md },
+  note: { fontSize: fontSize.sm, color: colors.textMuted },
+  addBlock: { gap: spacing.sm },
+  addButtons: { flexDirection: 'row', gap: spacing.md },
+  error: { fontSize: fontSize.sm, color: colors.danger },
+  separator: { height: spacing.md },
+});

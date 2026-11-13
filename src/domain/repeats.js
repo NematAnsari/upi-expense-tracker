@@ -2,15 +2,11 @@
 // Only the list changes: every purchase stays its own transaction, so totals,
 // UPI matching, edit and delete work as before.
 
+import { getDayKey } from '../utils/dates.js';
+
 /** The name a row shows (same as TransactionRow's title, without the category fallback). */
 function nameOf(transaction) {
   return (transaction.merchant || transaction.purpose || '').trim().toLowerCase();
-}
-
-/** "2026-11-4": the local calendar day of a time. */
-function dayOf(ms) {
-  const date = new Date(ms);
-  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 }
 
 /**
@@ -28,7 +24,7 @@ export function groupRepeats(transactions) {
     const name = nameOf(transaction);
     const key = name
       ? // A payment to a shop account never joins the teas it pays for.
-        `${dayOf(transaction.occurredAt)}|${name}|${transaction.categoryId}|${transaction.direction}|${transaction.shopEntry ?? ''}`
+        `${getDayKey(transaction.occurredAt)}|${name}|${transaction.categoryId}|${transaction.direction}|${transaction.shopEntry ?? ''}`
       : `id|${transaction.id}`;
     let group = byKey.get(key);
     if (!group) {

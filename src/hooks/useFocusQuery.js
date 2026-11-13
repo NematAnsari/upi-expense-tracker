@@ -10,12 +10,10 @@ import { useCallback, useState } from 'react';
 export function useFocusQuery(loader) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(true);
 
   const load = useCallback(() => {
     // Ignore results that arrive after the screen lost focus or the filters changed.
     let active = true;
-    setLoading(true);
     loader()
       .then((result) => {
         if (active) {
@@ -28,11 +26,6 @@ export function useFocusQuery(loader) {
           console.error(loadError);
           setError(loadError);
         }
-      })
-      .finally(() => {
-        if (active) {
-          setLoading(false);
-        }
       });
     return () => {
       active = false;
@@ -41,5 +34,5 @@ export function useFocusQuery(loader) {
 
   useFocusEffect(load);
 
-  return { data, error, loading, reload: load };
+  return { data, error, reload: load };
 }

@@ -2,10 +2,9 @@
 // This is only a suggestion: the app cannot know why you paid someone, so
 // payments to people or unknown shops are left as "Uncategorized".
 
-export const UNCATEGORIZED = 'Uncategorized';
-export const INCOME = 'Income';
+import { INCOME, UNCATEGORIZED } from '../constants/categories.js';
 
-const RULES = [
+const KEYWORD_RULES = [
   {
     category: 'Petrol & Transport',
     keywords: [
@@ -129,7 +128,7 @@ export function suggestCategoryName(counterparty, direction) {
   }
   const text = String(counterparty ?? '').toLowerCase();
   if (text) {
-    const rule = RULES.find(({ keywords }) => keywords.some((keyword) => containsKeyword(text, keyword)));
+    const rule = KEYWORD_RULES.find(({ keywords }) => keywords.some((keyword) => containsKeyword(text, keyword)));
     if (rule) {
       return rule.category;
     }

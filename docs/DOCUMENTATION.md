@@ -7,7 +7,7 @@ Everything about the app is defined here. When the app changes, this file change
 | --- | --- |
 | Last updated | 2026-11-13 |
 | Database schema version | 7 |
-| Automated tests | 122, all passing |
+| Automated tests | 128, all passing |
 | Platform | Android only |
 | Personal data | Not included here on purpose: no names, account numbers, project IDs or real messages |
 
@@ -44,7 +44,7 @@ An offline-first Android app for one person to track money in India.
 
 ## 3. Wording rules
 
-The app never shows the words loan, lend, borrow, owe or repay. The internal names (`loan_type`, `lent`...) are unchanged; only what the screen says follows these rules. The source of the wording is `src/domain/loans.js`.
+The app never shows the words loan, lend, borrow, owe or repay. The internal names (`loan_type`, `lent`...) are unchanged; only what the screen says follows these rules. The source of the wording is `src/domain/entryTypes.js` (type names) and `src/domain/people.js` (balance text).
 
 | Use | Instead of |
 | --- | --- |
@@ -67,11 +67,11 @@ Amounts are always colored: money paid is **red**, money received is **green**. 
 | Tab | **More** | Review payments and the less frequent screens |
 | Opened from tabs | Add / Edit transaction | The form (`transaction/new.js`, `transaction/[id].js`) |
 | Opened from tabs | History | Every expense and income entry, any month, with filters |
-| Opened from tabs | Person page | One person's balance and statement (`loan/[person].js`) |
+| Opened from tabs | Person page | One person's balance and statement (`person/[name].js`) |
 | Opened from More | Review payments | Detected payments waiting for Add or Ignore |
 | Opened from More | Payment detection | Notification access, battery and alert settings, recent bank messages |
 | Opened from More | Bank accounts | Rename accounts found in bank SMS, add your own |
-| Opened from More | Shop accounts, Statement | Take now, pay later accounts (`shops.js`, `shop/[id].js`) |
+| Opened from More | Shop accounts, Statement | Take now, pay later accounts (`shops/index.js`, `shops/[id].js`) |
 | Opened from More | Backup & restore | Save everything to a file, bring it back, automatic daily backup (`backup.js`) |
 | Opened from More | App lock | Switch the lock on or off (`app-lock.js`) |
 
@@ -124,7 +124,7 @@ Validation (`src/domain/validation.js`):
 | Name | Required for money given or taken. Saved with one space between words, so "Rahul  Kumar" and "Rahul Kumar" are one person |
 | Return by | Only kept for I gave or I took, and not before the entry's day |
 | Money received back or returned | Cannot be more than the remaining amount (`checkReturnAmount`) |
-| Editing or deleting money given or taken | Cannot leave money received back or returned larger than what there was to receive or return at that time (`checkLoanChange`). Example: ₹1,000 given and all paid back cannot be lowered to ₹500, deleted or turned into money taken. A person who was already inconsistent before (for example from an entry dated in the past) can still be edited |
+| Editing or deleting money given or taken | Cannot leave money received back or returned larger than what there was to receive or return at that time (`checkPeopleChange`). Example: ₹1,000 given and all paid back cannot be lowered to ₹500, deleted or turned into money taken. A person who was already inconsistent before (for example from an entry dated in the past) can still be edited |
 | Split | Your share must stay above ₹0 (see 4.4) |
 | Editing or deleting something taken at a shop | Cannot leave more paid than taken at that shop (`checkShopChange`) |
 
@@ -262,7 +262,7 @@ More > Backup & restore.
 - A backup from an older database version restores with defaults for new columns, and the built-in categories it lacks (Income, Uncategorized, Loans) are added, so money given or taken can still be saved. A backup from a newer version is refused, and so is a file with no categories (it is treated as damaged).
 - The file is **not encrypted or password protected**. The screen says so.
 - Format: `{ app: 'upi-expense-tracker', format: 1, schemaVersion, createdAt, tables: {...} }`. Code: `src/db/backup.js`, `src/services/backupFile.js`.
-- Settings that belong to this phone only (the App lock switch and the automatic backup folder, keys starting with `device_`) are never written into a backup file, and a restore leaves them as they are.
+- Settings that belong to this phone only (the App lock switch and the automatic backup folder, keys starting with `device_`, see `src/db/phoneSettings.js`) are never written into a backup file, and a restore leaves them as they are.
 
 **Automatic backup** (a card on the same screen; off until you switch it on)
 - **Back up every day:** the first time you switch it on, Android's folder picker opens. Pick a folder once, ideally one that Google Drive or another app keeps in sync, so a copy also lives off the phone. Android remembers the permission. Today's file is saved straight away, so you can see the folder works.
@@ -270,7 +270,7 @@ More > Backup & restore.
 - **Files:** one per day, `expense-auto-backup-YYYY-MM-DD.json` (a second run the same day replaces it). The newest **7** are kept; older automatic files are removed. Other files in the folder, including backups you saved by hand, are never touched.
 - The card shows the folder, the last automatic backup time, and the reason if the last try failed (for example the folder was deleted). **Change folder** picks another one.
 - A successful automatic backup also counts as "last backup", so the Expenses reminder stays quiet.
-- Code: `src/services/autoBackup.js` (writing and cleaning up), `src/services/autoBackupTask.js` (the nightly task, defined from the entry file `index.js` so Android can run it without opening a screen), `src/domain/autoBackup.js` (the rules), `src/db/deviceSettings.js`.
+- Code: `src/services/autoBackup.js` (writing and cleaning up), `src/services/autoBackupTask.js` (the nightly task, defined from the entry file `index.js` so Android can run it without opening a screen), `src/domain/autoBackupSchedule.js` (the rules), `src/db/phoneSettings.js`.
 
 ### 4.12 App lock
 
@@ -282,7 +282,7 @@ More > App lock. One switch, **off** until you turn it on.
 - **Turning it on or off** asks you to confirm with the phone's unlock first. It cannot be turned on when the phone has no screen lock; the app says to set one in the phone's settings.
 - The More tab's App lock row says whether it is on.
 - It protects the app on this phone only. A backup file is separate and has no password.
-- Code: `src/components/AppLock.js` (`AppLockProvider`, wrapped around all screens in `_layout.js`), `src/app/app-lock.js`. Package: `expo-local-authentication`.
+- Code: `src/components/wrappers/AppLockProvider.js` (`AppLockProvider`, wrapped around all screens in `_layout.js`), `src/app/app-lock.js`. Package: `expo-local-authentication`.
 
 ### 4.13 Small interface behavior
 
@@ -294,7 +294,8 @@ More > App lock. One switch, **off** until you turn it on.
   - money given or taken is refused, with the reason, when deleting it would leave money received back or returned larger than what there was at that time;
   - something taken at a shop is refused when deleting it would leave more paid than taken.
 - **Counts and today lines** use a shared grey pill (`CountPill`).
-- **Empty, loading and error states** use shared components (`States.js`).
+- **Empty, loading and error states** use shared components (`components/basics/ScreenStates.js`).
+- **App icon and splash screen:** the icon is a white wallet with a ₹ on the app teal (`#0F766E`), also used as the round and themed Android icons. On opening, the splash shows the same wallet on teal; it stays until the database is open (`HideSplash` in `_layout.js`) and then fades out (about 0.4 seconds), so there is no blank white flash. If the database cannot open, the splash hides so the error message shows. Expo Go shows neither: check them in a real build.
 
 ## 5. Money rules
 
@@ -316,10 +317,10 @@ Other rules:
 
 - **Money is integer paise** everywhere (₹12.50 is `1250`). Never floats. Indian grouping (₹1,23,456.78) comes from a hand-written `formatINR`.
 - **Direction:** `'debit'` is money paid, `'credit'` is money received.
-- **Remaining amount:** I gave and money returned add to what a person owes you; I took and money received back subtract (see `NET_SIGN` in `src/domain/loans.js`).
+- **Remaining amount:** I gave and money returned add to what a person owes you; I took and money received back subtract (see `NET_SIGN` in `src/domain/people.js`).
 - **Dates** are stored as UTC milliseconds and shown in the phone's local time.
 - **SQL** uses `?` placeholders only. Multi-step writes use `withExclusiveTransactionAsync`.
-- **Spending queries** share one definition (`IN_RANGE` in `src/db/reports.js`, `NOT_SHOP_PAYMENT` in `src/db/transactions.js`). A new kind of entry must be added there, or it will be counted wrongly.
+- **Spending queries** share one definition (`IS_SPENDING`, `IS_INCOME` and `NOT_SHOP_PAYMENT` in `src/db/sql.js`). A new kind of entry must be added there, or it will be counted wrongly.
 
 ## 6. Data model (SQLite, schema version 7)
 
@@ -364,18 +365,20 @@ Upgrading never loses data, and an upgrade cannot be undone. Save a backup befor
 
 | Area | Choice | Version |
 | --- | --- | --- |
-| Framework | React Native with Expo (managed, Continuous Native Generation) | Expo SDK 58 (`expo ~58.0.23`), React Native 0.88.1, React 19.3.0 |
+| Framework | React Native with Expo (managed, Continuous Native Generation) | Expo SDK 58 (`expo ~58.0.25`), React Native 0.88.1, React 19.3.0 |
 | Language | JavaScript only (no TypeScript, by requirement) | |
-| Navigation | Expo Router, file-based, routes in `src/app/` | `expo-router ~58.0.30` |
-| Database | `expo-sqlite`, WAL mode, foreign keys on | `~58.0.15` |
+| Navigation | Expo Router, file-based, routes in `src/app/` | `expo-router ~58.0.31` |
+| Database | `expo-sqlite`, WAL mode, foreign keys on | `~58.0.17` |
 | Styling | React Native `StyleSheet`, tokens in `src/constants/theme.js` | |
 | Icons | Thin outline icons drawn with `react-native-svg` (no icon font package) | 15.16.0 |
 | Gestures and animation | `react-native-gesture-handler`, `react-native-reanimated`, `react-native-worklets` | ~3.3.0, 4.7.1, 0.13.0 |
 | Keyboard | `react-native-keyboard-controller` | 1.22.7 |
 | Date and time input | `@react-native-community/datetimepicker` | 9.2.1 |
-| Backup | `expo-file-system`, `expo-sharing`, `expo-document-picker` | ~58.0.13, ~58.0.22, ~58.0.4 |
+| Backup | `expo-file-system`, `expo-sharing`, `expo-document-picker` | ~58.0.13, ~58.0.23, ~58.0.5 |
 | Automatic backup | `expo-background-task`, `expo-task-manager` (config plugin `expo-background-task` in app.json) | ~58.0.12, ~58.0.13 |
 | App lock | `expo-local-authentication` | ~58.0.2 |
+| Build settings | `expo-build-properties`: keep rules so code shrinking in release builds does not remove the background work parts the nightly backup needs | ~58.0.12 |
+| App icon and splash | `expo-splash-screen` (config plugin in app.json). Images in `assets/` | ~58.0.14 |
 | Native code | Local Expo module in Kotlin (`modules/upi-notification-listener`) | |
 | Builds | EAS Build in the cloud. `development` (dev client APK) and `preview` (standalone APK) | |
 | Tests | Node test runner with `node:sqlite`, through an adapter that mimics the expo-sqlite API | Node 22.13+ or 24.3+ (`.nvmrc` says 24) |
@@ -390,37 +393,64 @@ Notes:
 ### Folder structure
 
 ```
+index.js                  Entry file: defines the nightly backup task, then starts Expo Router
 src/
-  app/                    Screens (Expo Router). Every file is a route.
-    _layout.js            Opens the database, runs migrations, keyboard and gesture providers, the Stack.
-    (tabs)/               Bottom tabs: index.js (Expenses), given-taken.js, reports.js, more.js
-    transaction/          new.js (add) and [id].js (edit)
-    history.js            All expenses and income, with filters
-    loan/[person].js      One person's balance, summary and statement
-    review-payments.js    Detected payments waiting for Add, Edit or Ignore
-    auto-detect.js        Notification access, battery, alerts, recent bank messages
-    accounts.js           Bank accounts
-    shops.js              Shop accounts list and "New shop account" form
-    shop/[id].js          A shop account's statement
-    backup.js             Backup and restore
-  components/             Reusable UI: Amount, TransactionRow, RepeatGroupRow, TransactionForm, SplitCard,
-                          FilterSheet, MonthSelector, CategoryRing, TodoCard, ShopAccount, AmountSheet,
-                          DetectedPaymentCard, SwipeableRow, CountPill, icons, ...
-  constants/              Theme tokens, default categories, payment methods
-  db/                     All SQL, one file per area: transactions, reports, detected, accounts, categories,
-                          templates, suggestions, shopAccounts, backup. migrations.js holds schema versions.
-  domain/                 Business rules, no UI or SQL: validation, split, loans, repeats, shopAccount,
-                          transactionForm, categorize, banks, paymentParser
-  hooks/                  useFocusQuery (reload on focus), useAsyncValue, useDeleteTransaction
-  services/               detection.js (native listener to database), backupFile.js (file and share sheet)
-  ui/                     Toasts and confirmation dialogs
-  utils/                  Money and date formatting, text masking, source app names
+  app/                        Screens (Expo Router). Every file is a route.
+    _layout.js                Database, migrations, app lock, keyboard and gesture providers, the Stack
+    (tabs)/                   Bottom tabs: index.js (Expenses), given-taken.js, reports.js, more.js
+    transaction/              new.js (add) and [id].js (edit)
+    person/[name].js          One person's balance, summary and statement
+    shops/                    index.js (list and "New shop account"), [id].js (a shop's statement)
+    history.js                All expenses and income, with filters
+    review-payments.js        Detected payments waiting for Add, Edit or Ignore
+    payment-detection.js      Notification access, battery, alerts, recent bank messages
+    bank-accounts.js          Bank accounts
+    backup.js                 Backup and restore
+    app-lock.js               App lock switch
+  components/
+    basics/                   Small building blocks: Amount, Button, Card, Chip, TextField, TextLink, CountPill,
+                              ListRow, SegmentedControl, SideScrollRow, SwipeableRow, BottomSheet, ChoiceCell,
+                              LineIcon, ScreenStates, UndoBar
+    icons/                    icons.js (all outline drawings, OutlineIcon), CategoryIcon, StatusIcon, TabIcon
+    form/                     The add/edit form and its parts: TransactionForm, MoreDetailsCard, SplitCard,
+                              DueDateInput, DatePill, AmountSheet, AddNameBox, CategoryIconRow, SuggestionChips,
+                              TemplateBar, DetailLine, formChoices, useTemplates
+    rows/                     List rows: TransactionRow, TransactionListItem, PersonBalanceRow, AccountRow
+    sections/                 Larger blocks used by one or two screens: TotalTile, TotalsLine, TodoCard,
+                              SearchFilterBar, FilterSheet, MonthSelector, CategoryRing, ShopAccountCards,
+                              ShopAccountForm, ShopMonthSection, PersonSummaryCard, PersonStatementRow,
+                              PersonIcon, DetectedPaymentCard, CapturedMessageCard, DetectionSetupCards,
+                              AutoBackupCard
+    wrappers/                 Wrap the whole app: AppLockProvider, DatabaseErrorBoundary
+  constants/                  Theme tokens, default categories, payment methods
+  db/                         All SQL, one file per area. migrations.js holds schema versions.
+    sql.js                    Shared SQL pieces (what counts as spending, income, the same person)
+    transactions.js           Add, edit, delete, list entries
+    splitPayments.js          Split payments
+    people.js                 Money given and taken: balances, checks, rename
+    shopAccounts.js           Shop accounts
+    reports.js                Expenses tab and Reports totals
+    detectedCapture.js        Moving bank messages from the phone's queue into the database, duplicates
+    detected.js               Review payments: list, add, ignore, undo
+    nameMemory.js             Remembered names
+    accounts.js, categories.js, templates.js, suggestions.js, backup.js, phoneSettings.js
+  domain/                     Rules with no UI or SQL, tested alone: validation, entryTypes (I gave, I took...),
+                              people, split, repeats, shopAccounts, transactionForm, reviewChoices,
+                              autoBackupSchedule, categorize, banks, paymentParser
+  hooks/                      useFocusQuery (reload on focus), useAsyncValue, useDeleteTransaction,
+                              useUndoableAction
+  services/                   detection.js (native listener to database), backupFile.js (file and share sheet),
+                              autoBackup.js, autoBackupTask.js
+  utils/                      money, dates, text (plural, cleanName, initials), notify (messages, errors,
+                              questions), maskText, sourceApps
 modules/upi-notification-listener/   Kotlin native module (section 9)
-tests/                    Node tests
-docs/                     This file
+tests/                        Node tests (section 11)
+docs/                         This file
 ```
 
-Rules of the split: screens in `app/` only compose; SQL lives only in `db/`; rules that need no UI or database live in `domain/` so they can be tested alone. Non-route code never goes inside `src/app/`.
+Rules of the split: screens in `app/` only compose; SQL lives only in `db/`; rules that need no UI or database live in `domain/` so they can be tested alone (`domain/` never imports from `db/`). Non-route code never goes inside `src/app/`. Components go in the folder that matches their size: `basics/` for small pieces used everywhere, `sections/` for blocks of one screen.
+
+Naming: plain English. Functions say what they do (`getPeopleBalances`, `checkPeopleChange`, `openNewEntry`), files are named after what they hold, and comments explain why, in one line where possible.
 
 ## 8. Payment detection pipeline
 
@@ -431,7 +461,7 @@ Rules of the split: screens in `app/` only compose; SQL lives only in `db/`; rul
 5. **Private queue:** kept items wait in app-private storage (max 500) until the app opens.
 6. **Optional alert:** a "Payment detected" notification (needs `POST_NOTIFICATIONS`) opens Review payments through the `upiexpensetracker://review-payments` link.
 7. **Reconnect:** the service asks Android to rebind when disconnected, and the app asks again on every open. The app checks whether battery optimization is off and guides the user.
-8. **Sync** (`src/db/detected.js`, called by `services/detection.js` whenever Expenses, Review or Payment detection opens): moves the queue into `detected_payments` in a transaction, then empties the native queue. A failure on one item leaves it queued for retry. Waiting items are re-read with the current rules, so parser improvements also fix payments already waiting. Added and ignored items are never changed.
+8. **Sync** (`src/db/detectedCapture.js`, called by `services/detection.js` whenever Expenses, Review or Payment detection opens): moves the queue into `detected_payments` in a transaction, then empties the native queue. A failure on one item leaves it queued for retry. Waiting items are re-read with the current rules on every sync; unrecognized ones only when `PARSER_VERSION` in `paymentParser.js` goes up, so parser improvements also fix payments already waiting. Added and ignored items are never changed.
 9. **Parsing** (`src/domain/paymentParser.js`, `src/domain/banks.js`): regex based. Extracts direction, amount in paise, bank (39 banks, longest match wins), last 4 account digits, name and UPI reference. Supports "NAME paid you ₹X" (Google Pay), "Dr./Cr." formats and amounts without a currency sign. Unknown formats are kept as "unrecognized" so nothing is lost.
 10. **Duplicates:** the same UPI reference as a saved or detected payment is a duplicate. Without a reference, a similar amount, direction and time within 15 minutes is a **possible** duplicate (never merged silently). Two different references are never duplicates. A split payment saved by hand is compared by its **total** (its shares added up), both by time and by UPI reference, because the bank reports the whole amount.
 11. **Category suggestion** (`src/db/detected.js`, `src/domain/categorize.js`): what you saved for that name (remembered names), then the category last used for the name, then keyword rules, then Uncategorized. Received money defaults to Income.
@@ -455,21 +485,22 @@ The JS side loads it with `requireOptionalNativeModule`, so the app still runs w
 
 ## 11. Testing
 
-`npm test` runs **122 tests** (Node test runner, no phone needed). They use only made-up data.
+`npm test` runs **128 tests** (Node test runner, no phone needed). They use only made-up data.
 
 | File | Covers |
 | --- | --- |
 | `money`, `dates`, `maskText` | Parsing and formatting money, date edges, masking text |
 | `paymentParser`, `banks` | Many bank message formats, bank matching |
-| `database`, `phase2`, `phase3` | Migrations and upgrades from older versions, transactions, reports, templates, suggestions, detection sync, duplicates, undo |
-| `loans`, `peopleTools` | Balances, dates, summaries, sorting and showing people, similar names, rename and combine |
+| `database`, `suggestionsAndTemplates`, `paymentDetection` | Migrations and upgrades from older versions, transactions, reports, templates, suggestions, detection sync, duplicates, undo |
+| `peopleBalances`, `peopleTools` | Balances, dates, summaries, sorting and showing people, the name order, similar names, rename and combine |
 | `accountsAndFilters` | Bank accounts and list filters |
 | `repeats` | Grouping repeat purchases |
-| `newFeatures` | Split payments, remembered names, return by, backup and restore, audit fixes |
+| `reviewChoices` | What a waiting payment becomes from the choices on its Review card, the "Add all" check |
+| `splitReturnByAndBackup` | Split payments, remembered names, return by, backup and restore, audit fixes |
 | `shopAccounts` | The diary rule, spending exclusions, shop payments from bank SMS, backup of shop accounts |
-| `protection` | Automatic backup rules (one a day, file names, keeping the newest 7, never touching other files), this phone's settings kept out of backups and kept through a restore |
-| `moreFixes` | Shop accounts that cannot go below zero, editing and removing a shop account, Undo keeping an edit, split parts staying together, the version 7 name cleanup |
-| `gapFixes` | Deleting a bank payment, editing or deleting money given or taken, the hidden Loans category, split duplicates and split delete, names, restoring an old backup, Add all stopping partway |
+| `autoBackup` | Automatic backup rules (one a day, file names, keeping the newest 7, never touching other files), this phone's settings kept out of backups and kept through a restore |
+| `shopRulesAndUndo` | Shop accounts that cannot go below zero, editing and removing a shop account, Undo keeping an edit, split parts staying together, the version 7 name cleanup |
+| `deleteAndEditRules` | Deleting a bank payment, editing or deleting money given or taken, the hidden Loans category, split duplicates and split delete, names, restoring an old backup, Add all stopping partway |
 
 Commands: `npm run check` runs lint, format check and tests. `npx expo export --platform android --output-dir <folder>` confirms the app bundles. There are no screen (UI) tests: screens are checked by hand on a phone.
 
@@ -567,14 +598,18 @@ Ideas not built (put on hold by the owner): manage categories (rename, merge, hi
 | 2026-11-11 | Second round of fixes: shop accounts cannot go below zero and can be edited or removed; a date can be picked when adding or paying at a shop; Review details keeps the bank payment's direction; Undo keeps an edited entry; split parts share date and payment details on edit; a copy is kept before a restore, with "Undo last restore"; reminders on Expenses for a quiet bank SMS reader and an old backup; old names with extra spaces joined (schema 7); Expo patch updates (118 tests) |
 | 2026-11-13 | App lock with the phone's own unlock (locks after 1 minute away); automatic daily backup to a folder you pick, around midnight when Android allows, caught up on the next open, newest 7 files kept; this phone's settings kept out of backups (122 tests) |
 | 2026-11-13 | npm scripts cut from 11 to 5: `start` (Expo Go over a tunnel), `test`, `format`, `check`, `build`. Rare commands are listed in section 12 instead |
+| 2026-11-13 | Code cleanup, nothing on screen changed: components sorted into basics, icons, form, rows, sections and wrappers; routes renamed (`person/[name]`, `shops/`, `payment-detection`, `bank-accounts`); large files split (database code, the form, the person and shop screens, Review payments); plain-English names and shorter comments everywhere; repeated pieces shared (icons, search bar, totals line, bottom sheet, date pill, shop form, error and question helpers); faster loading (Expenses tab, shop list and statement, review from a bank payment, automatic backup settings, History while typing); test files named by topic (128 tests) |
+| 2026-11-13 | New shop account hint now says "Pending amount at the shop today..." instead of a sentence with "owe" (wording rule, section 3) |
+| 2026-11-13 | App icon (white wallet with ₹ on the app teal, picked from 6 designs) and a teal splash screen that stays until the database is open, then fades out |
+| 2026-11-13 | Fixed: the app closed with "keeps stopping" on open. The crash log (adb) showed Android's background work library (used by the nightly backup) missing a part that the release build's code shrinking (R8, on by default in SDK 58) had removed. Keep rules added through `expo-build-properties`. Expo packages also updated to matching patch versions |
 
 ## 16. Suggested review focus
 
 1. **Money handling:** paise conversion, totals that exclude given or taken, shop payments and split parts where they should.
-2. **Deleting and editing rules** (`useDeleteTransaction`, `checkLoanChange`, `deleteTransactions`): could a valid change be refused, or a bad one slip through?
+2. **Deleting and editing rules** (`useDeleteTransaction`, `checkPeopleChange`, `deleteTransactions`): could a valid change be refused, or a bad one slip through?
 3. **Parser robustness** (`paymentParser.js`, `banks.js`): false positives (OTP, offers, balance alerts) and misses.
-4. **Duplicate logic** (`src/db/detected.js`): could a real payment be marked duplicate, or a duplicate slip through?
+4. **Duplicate logic** (`src/db/detectedCapture.js`): could a real payment be marked duplicate, or a duplicate slip through?
 5. **Native service** (`PaymentNotificationListenerService.kt`, `CapturedNotificationStore.kt`): thread safety, the fingerprint design, behavior when the app is killed.
 6. **Migrations and backup restore:** safety of upgrades and restores on a phone with existing data.
 7. **Privacy:** logs, shared text, backup file handling, notifications on the lock screen.
-8. **Code quality:** the folder split (app, components, db, domain) and duplicated styles.
+8. **Code quality:** the folder split (section 7) and whether any screen still repeats a shared piece.

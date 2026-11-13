@@ -1,12 +1,13 @@
-// Shop accounts: take now, pay later (see domain/shopAccount.js).
+// Shop accounts: take now, pay later (see domain/shopAccounts.js).
 // A tea is saved as an expense with shop_entry 'purchase' (spending on its
 // day); paying the shop is saved with shop_entry 'payment' (not spending).
 
-import { shopStatement } from '../domain/shopAccount.js';
+import { shopPaymentValues, shopStatement } from '../domain/shopAccounts.js';
 import { formatINR } from '../utils/money.js';
+import { cleanName } from '../utils/text.js';
 import { createTransaction, SELECT_TRANSACTION } from './transactions.js';
 
-const SELECT_ACCOUNT = `
+const SELECT_SHOP = `
   SELECT s.id, s.name, s.category_id AS categoryId, c.name AS categoryName,
          s.usual_amount_paise AS usualAmountPaise, s.opening_due_paise AS openingDuePaise,
          s.created_at AS createdAt
@@ -14,12 +15,31 @@ const SELECT_ACCOUNT = `
   JOIN categories c ON c.id = s.category_id
 `;
 
-async function entriesFor(db, accountId) {
-  return db.getAllAsync(
-    `SELECT shop_entry AS shopEntry, amount_paise AS amountPaise, occurred_at AS occurredAt
-     FROM transactions WHERE shop_account_id = ?`,
-    [accountId],
-  );
+// What shopStatement needs from each tea and payment.
+const SELECT_SHOP_AMOUNTS = `
+  SELECT shop_account_id AS shopAccountId, shop_entry AS shopEntry, amount_paise AS amountPaise,
+         occurred_at AS occurredAt
+  FROM transactions
+`;
+
+async function listShopAmounts(db, accountId) {
+  return db.getAllAsync(`${SELECT_SHOP_AMOUNTS} WHERE shop_account_id = ?`, [accountId]);
+}
+
+/** The cleaned shop name. Throws when it is empty or another account (not exceptId) has it. */
+async function checkShopName(db, name, exceptId = null) {
+  const shopName = cleanName(name);
+  if (!shopName) {
+    throw new Error('Enter the shop name.');
+  }
+  const taken = await db.getFirstAsync('SELECT id FROM shop_accounts WHERE name = ? AND id IS NOT ?', [
+    shopName,
+    exceptId,
+  ]);
+  if (taken) {
+    throw new Error(`${shopName} already has an account.`);
+  }
+  return shopName;
 }
 
 /**
@@ -28,22 +48,31 @@ async function entriesFor(db, accountId) {
  *    month: { carriedInPaise, purchasesPaise, count, paidPaise, duePaise } }].
  */
 export async function listShopAccounts(db, now = new Date()) {
-  const accounts = await db.getAllAsync(`${SELECT_ACCOUNT} ORDER BY s.name`);
-  const result = [];
-  for (const account of accounts) {
-    const statement = shopStatement(account, await entriesFor(db, account.id), now);
-    result.push({ ...account, duePaise: statement.duePaise, month: statement.months.at(-1) });
+  // Two queries in all (not one per shop): the amounts are grouped here.
+  const [accounts, amounts] = await Promise.all([
+    db.getAllAsync(`${SELECT_SHOP} ORDER BY s.name`),
+    db.getAllAsync(`${SELECT_SHOP_AMOUNTS} WHERE shop_account_id IS NOT NULL`),
+  ]);
+  const byAccount = new Map();
+  for (const row of amounts) {
+    if (!byAccount.has(row.shopAccountId)) {
+      byAccount.set(row.shopAccountId, []);
+    }
+    byAccount.get(row.shopAccountId).push(row);
   }
-  return result;
+  return accounts.map((account) => {
+    const statement = shopStatement(account, byAccount.get(account.id) ?? [], now);
+    return { ...account, duePaise: statement.duePaise, month: statement.months.at(-1) };
+  });
 }
 
 /** One account with its month-by-month statement (oldest first), or null. */
 export async function getShopAccount(db, id, now = new Date()) {
-  const account = await db.getFirstAsync(`${SELECT_ACCOUNT} WHERE s.id = ?`, [id]);
+  const account = await db.getFirstAsync(`${SELECT_SHOP} WHERE s.id = ?`, [id]);
   if (!account) {
     return null;
   }
-  const statement = shopStatement(account, await entriesFor(db, id), now);
+  const statement = shopStatement(account, await listShopAmounts(db, id), now);
   return { ...account, ...statement };
 }
 
@@ -59,23 +88,17 @@ export async function listShopEntries(db, accountId) {
  * already owe from your diary (0 when starting fresh). Returns the new id.
  */
 export async function createShopAccount(db, { name, categoryId, usualAmountPaise = null, openingDuePaise = 0 }) {
-  const clean = String(name ?? '')
-    .trim()
-    .replace(/\s+/g, ' ');
-  if (!clean) {
+  if (!cleanName(name)) {
     throw new Error('Enter the shop name.');
   }
   if (!Number.isInteger(categoryId)) {
     throw new Error('Choose a category.');
   }
-  const existing = await db.getFirstAsync('SELECT id FROM shop_accounts WHERE name = ?', [clean]);
-  if (existing) {
-    throw new Error(`${clean} already has an account.`);
-  }
+  const shopName = await checkShopName(db, name);
   const result = await db.runAsync(
     `INSERT INTO shop_accounts (name, category_id, usual_amount_paise, opening_due_paise, created_at)
      VALUES (?, ?, ?, ?, ?)`,
-    [clean, categoryId, usualAmountPaise, openingDuePaise, Date.now()],
+    [shopName, categoryId, usualAmountPaise, openingDuePaise, Date.now()],
   );
   return result.lastInsertRowId;
 }
@@ -85,7 +108,7 @@ export async function createShopAccount(db, { name, categoryId, usualAmountPaise
  * The amount becomes the one filled in next time.
  */
 export async function addShopPurchase(db, accountId, amountPaise, occurredAt = Date.now()) {
-  const account = await db.getFirstAsync(`${SELECT_ACCOUNT} WHERE s.id = ?`, [accountId]);
+  const account = await db.getFirstAsync(`${SELECT_SHOP} WHERE s.id = ?`, [accountId]);
   if (!account) {
     throw new Error('This shop account no longer exists.');
   }
@@ -110,22 +133,6 @@ export async function addShopPurchase(db, accountId, amountPaise, occurredAt = D
     await txn.runAsync('UPDATE shop_accounts SET usual_amount_paise = ? WHERE id = ?', [amountPaise, accountId]);
   });
   return id;
-}
-
-/**
- * Paying the shop: lowers what is due. `values` is a transaction (amount,
- * method, bank account, date...); the shop fields are set here.
- */
-export function shopPaymentValues(account, values) {
-  return {
-    ...values,
-    direction: 'debit',
-    loanType: null,
-    categoryId: account.categoryId,
-    merchant: account.name,
-    shopAccountId: account.id,
-    shopEntry: 'payment',
-  };
 }
 
 export async function addShopPayment(db, account, values) {
@@ -202,16 +209,7 @@ export async function updateShopAccount(db, id, { name, usualAmountPaise = null,
   if (!account) {
     throw new Error('This shop account no longer exists.');
   }
-  const clean = String(name ?? '')
-    .trim()
-    .replace(/\s+/g, ' ');
-  if (!clean) {
-    throw new Error('Enter the shop name.');
-  }
-  const taken = await db.getFirstAsync('SELECT id FROM shop_accounts WHERE name = ? AND id <> ?', [clean, id]);
-  if (taken) {
-    throw new Error(`${clean} already has an account.`);
-  }
+  const shopName = await checkShopName(db, name, id);
   const dueAfter = account.duePaise - account.openingDuePaise + openingDuePaise;
   if (dueAfter < 0) {
     throw new Error(
@@ -221,14 +219,14 @@ export async function updateShopAccount(db, id, { name, usualAmountPaise = null,
   await db.withExclusiveTransactionAsync(async (txn) => {
     await txn.runAsync(
       'UPDATE shop_accounts SET name = ?, usual_amount_paise = ?, opening_due_paise = ? WHERE id = ?',
-      [clean, usualAmountPaise, openingDuePaise, id],
+      [shopName, usualAmountPaise, openingDuePaise, id],
     );
     await txn.runAsync('UPDATE transactions SET merchant = ?, updated_at = ? WHERE shop_account_id = ?', [
-      clean,
+      shopName,
       Date.now(),
       id,
     ]);
-    await txn.runAsync('UPDATE name_memory SET merchant = ? WHERE shop_account_id = ?', [clean, id]);
+    await txn.runAsync('UPDATE name_memory SET merchant = ? WHERE shop_account_id = ?', [shopName, id]);
   });
 }
 

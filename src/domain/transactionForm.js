@@ -1,11 +1,12 @@
 // Pure helpers for the transaction form. No React or database code here, so
 // they can be tested on their own.
 
-import { DEFAULT_PAYMENT_METHOD, PAYMENT_METHODS } from '../constants/categories.js';
+import { DEFAULT_PAYMENT_METHOD, PAYMENT_METHODS, LOANS_CATEGORY } from '../constants/categories.js';
 import { paiseToInputString } from '../utils/money.js';
-import { LOANS_CATEGORY } from './loans.js';
 
-export function createEmptyTransactionForm(lastPaymentMethod) {
+const MAX_TEMPLATE_NAME_LENGTH = 40;
+
+export function emptyTransactionForm(lastPaymentMethod) {
   return {
     amountText: '',
     direction: 'debit',
@@ -44,9 +45,16 @@ export function activityFor(form) {
   return ACTIVITIES.find((activity) => activity.direction === direction && activity.loanType === loanType) ?? null;
 }
 
-/** Categories you can pick by hand. "Loans" is set automatically for loans, so it is not offered. */
+/** The category with this name, any case, or undefined. */
+export function findCategory(categories, name) {
+  const wanted = String(name ?? '').toLowerCase();
+  return categories.find((category) => category.name.toLowerCase() === wanted);
+}
+
+/** Categories you can pick by hand. Loans is set automatically for money given or taken, so it is not offered. */
 export function pickableCategories(categories) {
-  return categories.filter((category) => category.name.toLowerCase() !== LOANS_CATEGORY.toLowerCase());
+  const loans = findCategory(categories, LOANS_CATEGORY);
+  return categories.filter((category) => category !== loans);
 }
 
 /**
@@ -63,8 +71,7 @@ export function categoryIdForSave(form, categories) {
   if (!form.loanType) {
     return form.categoryId;
   }
-  const loans = categories.find((category) => category.name.toLowerCase() === LOANS_CATEGORY.toLowerCase());
-  return loans?.id ?? form.categoryId;
+  return findCategory(categories, LOANS_CATEGORY)?.id ?? form.categoryId;
 }
 
 /** Fills the form from a template. Keeps a typed amount if the template has none. */
@@ -80,6 +87,6 @@ export function applyTemplate(form, template) {
 }
 
 /** A short name for a template: its purpose, else merchant, else category. */
-export function buildTemplateName(template, categoryName) {
-  return (template.purpose || template.merchant || categoryName).slice(0, 40);
+export function templateNameFor(template, categoryName) {
+  return (template.purpose || template.merchant || categoryName).slice(0, MAX_TEMPLATE_NAME_LENGTH);
 }

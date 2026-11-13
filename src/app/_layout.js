@@ -2,26 +2,34 @@
 // migrations, and only then renders the app, so screens can always query it.
 
 import { Stack } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { SQLiteProvider, useSQLiteContext } from 'expo-sqlite';
 import { StatusBar } from 'expo-status-bar';
 import { Suspense, useEffect } from 'react';
 import { StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
-import { AppLockProvider } from '../components/AppLock';
-import { DatabaseErrorBoundary } from '../components/DatabaseErrorBoundary';
-import { LoadingState } from '../components/States';
+import { AppLockProvider } from '../components/wrappers/AppLockProvider';
+import { DatabaseErrorBoundary } from '../components/wrappers/DatabaseErrorBoundary';
+import { LoadingState } from '../components/basics/ScreenStates';
 import { colors } from '../constants/theme';
-import { getAutoBackupSettings } from '../db/deviceSettings';
+import { getAutoBackupSettings } from '../db/phoneSettings';
 import { DATABASE_NAME, migrateDbIfNeeded } from '../db/migrations';
 import { runAutoBackupIfDue } from '../services/autoBackup';
 import { syncAutoBackupTask } from '../services/autoBackupTask';
 
-/**
- * Once, when the app opens: makes sure the nightly backup is scheduled if it
- * is switched on, and catches up when last night's backup did not run
- * (Android may skip background work). Shows nothing.
- */
+// Keep the splash up until the database is open, so there is no blank flash. It fades out by itself.
+SplashScreen.preventAutoHideAsync();
+
+/** Hides the splash once it is drawn, which is after the database opened. */
+function HideSplash() {
+  useEffect(() => {
+    SplashScreen.hide();
+  }, []);
+  return null;
+}
+
+/** When the app opens: schedules the nightly backup if it is on, and catches up a missed one (Android may skip it). */
 function AutoBackupOnOpen() {
   const db = useSQLiteContext();
   useEffect(() => {
@@ -46,6 +54,7 @@ export default function RootLayout() {
           <Suspense fallback={<LoadingState message="Opening your expenses..." />}>
             <SQLiteProvider databaseName={DATABASE_NAME} onInit={migrateDbIfNeeded} useSuspense>
               <StatusBar style="dark" />
+              <HideSplash />
               <AutoBackupOnOpen />
               <AppLockProvider>
                 <Stack
@@ -60,13 +69,13 @@ export default function RootLayout() {
                   <Stack.Screen name="transaction/new" options={{ title: 'Add Expense' }} />
                   <Stack.Screen name="transaction/[id]" options={{ title: 'Edit Expense' }} />
                   <Stack.Screen name="review-payments" options={{ title: 'Review Payments' }} />
-                  <Stack.Screen name="auto-detect" options={{ title: 'Payment Detection' }} />
-                  <Stack.Screen name="accounts" options={{ title: 'Bank Accounts' }} />
+                  <Stack.Screen name="payment-detection" options={{ title: 'Payment Detection' }} />
+                  <Stack.Screen name="bank-accounts" options={{ title: 'Bank Accounts' }} />
                   <Stack.Screen name="history" options={{ title: 'History' }} />
-                  <Stack.Screen name="loan/[person]" options={{ title: 'Details' }} />
+                  <Stack.Screen name="person/[name]" options={{ title: 'Details' }} />
                   <Stack.Screen name="backup" options={{ title: 'Backup & Restore' }} />
-                  <Stack.Screen name="shops" options={{ title: 'Shop Accounts' }} />
-                  <Stack.Screen name="shop/[id]" options={{ title: 'Statement' }} />
+                  <Stack.Screen name="shops/index" options={{ title: 'Shop Accounts' }} />
+                  <Stack.Screen name="shops/[id]" options={{ title: 'Statement' }} />
                   <Stack.Screen name="app-lock" options={{ title: 'App Lock' }} />
                 </Stack>
               </AppLockProvider>

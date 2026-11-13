@@ -4,12 +4,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildBackup, restoreBackup } from '../src/db/backup.js';
 import { listCategories } from '../src/db/categories.js';
-import {
-  addDetectedAsTransaction,
-  detectedToTransaction,
-  listPendingDetected,
-  syncCapturedNotifications,
-} from '../src/db/detected.js';
+import { addDetectedAsTransaction, listPendingDetected } from '../src/db/detected.js';
+import { detectedToTransaction } from '../src/domain/reviewChoices.js';
 import { getDashboardData, getMonthlyReport } from '../src/db/reports.js';
 import {
   addShopPayment,
@@ -18,12 +14,13 @@ import {
   createShopAccount,
   getShopAccount,
   listShopAccounts,
-  shopPaymentValues,
 } from '../src/db/shopAccounts.js';
 import { listTransactions } from '../src/db/transactions.js';
 import { groupRepeats } from '../src/domain/repeats.js';
-import { paymentText, shopStatement } from '../src/domain/shopAccount.js';
+import { shopStatement, shopPaymentValues } from '../src/domain/shopAccounts.js';
 import { createTestDatabase } from './helpers/testDatabase.js';
+import { paymentText } from '../src/domain/entryTypes.js';
+import { syncCapturedNotifications } from '../src/db/detectedCapture.js';
 
 const at = (month, day, hour = 9) => new Date(2026, month - 1, day, hour).getTime();
 const NOV_15 = new Date(2026, 10, 15, 12);

@@ -1,23 +1,24 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { listCategories } from '../src/db/categories.js';
-import { getLoanBalances } from '../src/db/reports.js';
-import { createTransaction, listTransactions, renamePerson } from '../src/db/transactions.js';
+
+import { createTransaction, listTransactions } from '../src/db/transactions.js';
 import {
-  describeNet,
+  remainingText,
   findSimilarPeople,
   personSummary,
   reminderMessage,
-  runningRemaining,
+  remainingAfterEach,
   settlementDates,
-  shortLeft,
-  showPeople,
+  leftText,
+  filterPeople,
   sortPeople,
-  suggestLoanType,
+  suggestReturnType,
   timelineText,
-} from '../src/domain/loans.js';
+} from '../src/domain/people.js';
 import { daysBetween, formatDuration, formatOrdinalDate } from '../src/utils/dates.js';
 import { createTestDatabase } from './helpers/testDatabase.js';
+import { renamePerson, getPeopleBalances } from '../src/db/people.js';
 
 const day = (month, date) => new Date(2026, month - 1, date, 12).getTime();
 
@@ -50,7 +51,7 @@ test('open date and running remaining follow the entries in time order', () => {
     { id: 4, loanType: 'lent', amountPaise: 6000, occurredAt: day(8, 25) }, // opens again
   ];
   assert.equal(settlementDates(entries).openSinceAt, day(8, 25), 'the latest time it moved away from zero');
-  assert.deepEqual(runningRemaining(entries), { 1: 5000, 2: 0, 4: 6000, 3: 4000 });
+  assert.deepEqual(remainingAfterEach(entries), { 1: 5000, 2: 0, 4: 6000, 3: 4000 });
   assert.equal(settlementDates(entries.slice(1, 3)).openSinceAt, null, 'settled: no pending date');
   // Overpaid in the past flips the side: the open amount starts at that entry.
   const flipped = [
@@ -72,9 +73,9 @@ test('open date and running remaining follow the entries in time order', () => {
   });
   assert.deepEqual(settlementDates(entries), { openSinceAt: day(8, 25), settledAt: null, settledFromAt: null });
 
-  assert.equal(describeNet(5700000), '₹57,000.00 left to receive');
-  assert.equal(describeNet(-600000), '₹6,000.00 left to return');
-  assert.equal(describeNet(0), 'Fully settled');
+  assert.equal(remainingText(5700000), '₹57,000.00 left to receive');
+  assert.equal(remainingText(-600000), '₹6,000.00 left to return');
+  assert.equal(remainingText(0), 'Fully settled');
 });
 
 test('dates: ordinal day, and total time as days, months or years', () => {
@@ -127,14 +128,14 @@ test('person summary: paired totals, share back, first and last-back dates', () 
     { loanType: 'lent', amountPaise: 900000, occurredAt: day(8, 20) },
     { loanType: 'lent_repaid', amountPaise: 200000, occurredAt: day(9, 1) },
   ];
-  const owesYou = {
-    status: 'owesYou',
+  const toReceive = {
+    status: 'toReceive',
     givenPaise: 5900000,
     receivedBackPaise: 200000,
     takenPaise: 0,
     returnedPaise: 0,
   };
-  const summary = personSummary(owesYou, entries);
+  const summary = personSummary(toReceive, entries);
   assert.deepEqual(
     summary.pair.map((part) => [part.label, part.paise]),
     [
@@ -148,7 +149,7 @@ test('person summary: paired totals, share back, first and last-back dates', () 
   assert.equal(summary.count, 3);
 
   // Nothing back yet: the pair still has both sides, the second is 0.
-  const nothingBack = personSummary({ ...owesYou, receivedBackPaise: 0 }, entries.slice(0, 2));
+  const nothingBack = personSummary({ ...toReceive, receivedBackPaise: 0 }, entries.slice(0, 2));
   assert.deepEqual(
     nothingBack.pair.map((part) => part.paise),
     [5900000, 0],
@@ -158,7 +159,7 @@ test('person summary: paired totals, share back, first and last-back dates', () 
 
   // Money you took: "Total taken | Returned".
   const took = personSummary(
-    { status: 'youOwe', givenPaise: 0, receivedBackPaise: 0, takenPaise: 100000, returnedPaise: 25000 },
+    { status: 'toReturn', givenPaise: 0, receivedBackPaise: 0, takenPaise: 100000, returnedPaise: 25000 },
     [
       { loanType: 'borrowed', amountPaise: 100000, occurredAt: day(9, 5) },
       { loanType: 'borrowed_repaid', amountPaise: 25000, occurredAt: day(9, 9) },
@@ -170,17 +171,17 @@ test('person summary: paired totals, share back, first and last-back dates', () 
   );
   assert.equal(took.share, 0.25);
 
-  assert.equal(shortLeft(5000000), '₹50,000.00 left');
-  assert.equal(shortLeft(-600000), '₹6,000.00 left');
-  assert.equal(shortLeft(0), 'Settled');
+  assert.equal(leftText(5000000), '₹50,000.00 left');
+  assert.equal(leftText(-600000), '₹6,000.00 left');
+  assert.equal(leftText(0), 'Settled');
 });
 
 test('people can be sorted; fully settled always last', () => {
   const people = [
-    { person: 'A', status: 'owesYou', amountPaise: 100, lastAt: 30, openSinceAt: 20 },
+    { person: 'A', status: 'toReceive', amountPaise: 100, lastAt: 30, openSinceAt: 20 },
     { person: 'B', status: 'settled', amountPaise: 0, lastAt: 99, openSinceAt: null },
-    { person: 'C', status: 'youOwe', amountPaise: 900, lastAt: 10, openSinceAt: 5 },
-    { person: 'D', status: 'owesYou', amountPaise: 500, lastAt: 20, openSinceAt: 15 },
+    { person: 'C', status: 'toReturn', amountPaise: 900, lastAt: 10, openSinceAt: 5 },
+    { person: 'D', status: 'toReceive', amountPaise: 500, lastAt: 20, openSinceAt: 15 },
   ];
   const names = (mode) => sortPeople(people, mode).map((p) => p.person);
   assert.deepEqual(names('latest'), ['A', 'D', 'C', 'B']);
@@ -195,13 +196,13 @@ test('people can be sorted; fully settled always last', () => {
 
 test('people can be shown all, pending only or settled only', () => {
   const people = [
-    { person: 'A', status: 'owesYou' },
+    { person: 'A', status: 'toReceive' },
     { person: 'B', status: 'settled' },
-    { person: 'C', status: 'youOwe' },
+    { person: 'C', status: 'toReturn' },
   ];
-  const names = (show) => showPeople(people, show).map((p) => p.person);
+  const names = (show) => filterPeople(people, show).map((p) => p.person);
   assert.deepEqual(names('all'), ['A', 'B', 'C']);
-  assert.deepEqual(showPeople(people).length, 3, 'All is the default');
+  assert.deepEqual(filterPeople(people).length, 3, 'All is the default');
   assert.deepEqual(names('pending'), ['A', 'C']);
   assert.deepEqual(names('settled'), ['B']);
 });
@@ -219,24 +220,24 @@ test('similar names are offered, exact matches and unrelated names are not', () 
 
 test('a detected payment from someone with money to receive suggests money received back', () => {
   const people = [
-    { person: 'Mohammed Shadab', status: 'owesYou', amountPaise: 300000, netPaise: 300000 },
-    { person: 'Amit', status: 'youOwe', amountPaise: 50000, netPaise: -50000 },
+    { person: 'Mohammed Shadab', status: 'toReceive', amountPaise: 300000, netPaise: 300000 },
+    { person: 'Amit', status: 'toReturn', amountPaise: 50000, netPaise: -50000 },
   ];
   const detected = (direction, counterparty, amountPaise) => ({ direction, counterparty, amountPaise });
-  assert.equal(suggestLoanType(detected('credit', 'MOHAMMED SHADAB', 100000), people).loanType, 'lent_repaid');
-  assert.equal(suggestLoanType(detected('debit', 'amit', 50000), people).loanType, 'borrowed_repaid');
-  assert.equal(suggestLoanType(detected('credit', 'Mohammed Shadab', 300001), people), null, 'more than remaining');
-  assert.equal(suggestLoanType(detected('debit', 'Mohammed Shadab', 100), people), null, 'wrong side');
-  assert.equal(suggestLoanType(detected('credit', 'Someone Else', 100), people), null);
-  assert.equal(suggestLoanType(detected('credit', null, 100), people), null);
+  assert.equal(suggestReturnType(detected('credit', 'MOHAMMED SHADAB', 100000), people).loanType, 'lent_repaid');
+  assert.equal(suggestReturnType(detected('debit', 'amit', 50000), people).loanType, 'borrowed_repaid');
+  assert.equal(suggestReturnType(detected('credit', 'Mohammed Shadab', 300001), people), null, 'more than remaining');
+  assert.equal(suggestReturnType(detected('debit', 'Mohammed Shadab', 100), people), null, 'wrong side');
+  assert.equal(suggestReturnType(detected('credit', 'Someone Else', 100), people), null);
+  assert.equal(suggestReturnType(detected('credit', null, 100), people), null);
 });
 
 test('reminder text is friendly and only for money to receive', () => {
   assert.equal(
-    reminderMessage({ person: 'Rahul', status: 'owesYou', amountPaise: 5700000 }),
+    reminderMessage({ person: 'Rahul', status: 'toReceive', amountPaise: 5700000 }),
     'Hi Rahul, just a friendly reminder: ₹57,000.00 is still remaining from the money I gave you. Thank you!',
   );
-  assert.equal(reminderMessage({ person: 'Amit', status: 'youOwe', amountPaise: 100 }), null);
+  assert.equal(reminderMessage({ person: 'Amit', status: 'toReturn', amountPaise: 100 }), null);
 });
 
 test('balances include when the open amount started', async () => {
@@ -245,7 +246,7 @@ test('balances include when the open amount started', async () => {
   await add(200000, 'credit', 'lent_repaid', ' rahul ', day(9, 1));
   await add(10000, 'debit', 'lent', 'Sara', day(9, 2));
   await add(10000, 'credit', 'lent_repaid', 'Sara', day(9, 3));
-  const byName = Object.fromEntries((await getLoanBalances(db)).people.map((p) => [p.person.toLowerCase(), p]));
+  const byName = Object.fromEntries((await getPeopleBalances(db)).people.map((p) => [p.person.toLowerCase(), p]));
   assert.equal(byName.rahul.openSinceAt, day(8, 12));
   assert.equal(byName.sara.openSinceAt, null);
   assert.equal(byName.sara.settledAt, day(9, 3));
@@ -260,7 +261,7 @@ test('rename moves all money given and taken entries, and can combine two people
   await add(9900, 'debit', null, 'Rahul', day(8, 4), 'Shopping'); // an expense with the same name
 
   assert.equal(await renamePerson(db, 'rahul', '  Rahul   Kumar '), 2);
-  const people = (await getLoanBalances(db)).people;
+  const people = (await getPeopleBalances(db)).people;
   assert.equal(people.length, 1, 'combined into one person');
   assert.equal(people[0].person, 'Rahul Kumar');
   assert.equal(people[0].amountPaise, 700000);

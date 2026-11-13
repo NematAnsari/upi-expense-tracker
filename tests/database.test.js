@@ -164,7 +164,7 @@ test('empty month report has zeros and no percentage change', async () => {
   assert.equal(report.comparison.changePercent, null);
 });
 
-test('dashboard data: month, today and five most recent', async () => {
+test('dashboard data: month and today; the list is newest first', async () => {
   const { db, add } = await setup();
   for (let day = 1; day <= 7; day += 1) {
     await add(String(day * 100), 'Food & Dining', oct(day));
@@ -177,8 +177,9 @@ test('dashboard data: month, today and five most recent', async () => {
   assert.equal(data.todayTotals.totalPaise, 7500);
   assert.equal(data.todayTotals.count, 2);
   assert.equal(data.monthTotals.count, 10);
-  assert.equal(data.recent.length, 5);
-  assert.equal(data.recent[0].amountPaise, 99900); // newest first
+  const latest = await listTransactions(db, { kind: 'regular', limit: 5 });
+  assert.equal(latest.length, 5);
+  assert.equal(latest[0].amountPaise, 99900); // newest first
 });
 
 test('history filters: search, category, month and sort order', async () => {

@@ -1,31 +1,31 @@
-// Expenses tab, laid out like Given & Taken: two tiles (Spent, Received) with
-// a + to add, a to-do card (payments to review, expenses missing a purpose),
-// a card per shop account (tea taken now, paid later), then this month's expenses and
-// income with All / Paid / Received tabs, search and Filters (a sheet with sort
-// order, category, payment method and bank account icons).
-// Swipe a row right to edit or left to delete. History has every month.
-// The list is a FlatList, so a busy month only draws the rows on screen.
-// Money given to or taken from people is on its own tab (given-taken.js).
+// Expenses tab: Spent and Received tiles, a to-do card, shop accounts, then this month's
+// expenses and income with All / Paid / Received tabs, search and Filters.
 
 import { useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
-import { Amount } from '../../components/Amount';
-import { ChoiceRow, countFilters, FilterButton, FilterSheet, PaymentFilters } from '../../components/FilterSheet';
-import { ICONS } from '../../components/icons';
-import { MonthSelector } from '../../components/MonthSelector';
-import { SegmentedControl } from '../../components/SegmentedControl';
-import { EmptyState, ErrorState, LoadingState } from '../../components/States';
-import { RepeatGroupRow } from '../../components/RepeatGroupRow';
-import { ShopAccountStrip } from '../../components/ShopAccount';
-import { TextField } from '../../components/TextField';
-import { TextLink } from '../../components/TextLink';
-import { TodoCard } from '../../components/TodoCard';
-import { TotalTile } from '../../components/TotalTile';
+import {
+  ChoiceRow,
+  countFilters,
+  FilterSheet,
+  NO_FILTERS,
+  PaymentFilters,
+} from '../../components/sections/FilterSheet';
+import { ICONS } from '../../components/icons/icons';
+import { MonthSelector } from '../../components/sections/MonthSelector';
+import { SegmentedControl } from '../../components/basics/SegmentedControl';
+import { EmptyState, ErrorState, LoadingState } from '../../components/basics/ScreenStates';
+import { TransactionListItem } from '../../components/rows/TransactionListItem';
+import { SearchFilterBar } from '../../components/sections/SearchFilterBar';
+import { ShopAccountRow } from '../../components/sections/ShopAccountCards';
+import { TextLink } from '../../components/basics/TextLink';
+import { TodoCard } from '../../components/sections/TodoCard';
+import { TotalTile } from '../../components/sections/TotalTile';
+import { TotalsLine } from '../../components/sections/TotalsLine';
 import { colors, fontSize, radius, spacing } from '../../constants/theme';
 import { listAccounts } from '../../db/accounts';
-import { countEntries, getLastBackupAt } from '../../db/backup';
+import { countTransactions, getLastBackupAt } from '../../db/backup';
 import { listCategories } from '../../db/categories';
 import { countPendingDetected } from '../../db/detected';
 import { getDashboardData } from '../../db/reports';
@@ -35,9 +35,10 @@ import { groupRepeats } from '../../domain/repeats';
 import { pickableCategories } from '../../domain/transactionForm';
 import { useDeleteTransaction } from '../../hooks/useDeleteTransaction';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
-import { getQuietDays, syncDetectedPayments } from '../../services/detection';
+import { getDaysSinceLastMessage, syncDetectedPayments } from '../../services/detection';
 import { daysBetween, formatMonthLabel, getMonthKey, getMonthRange } from '../../utils/dates';
 import { formatINR } from '../../utils/money';
+import { plural } from '../../utils/text';
 
 // A backup older than this many days is due again.
 const BACKUP_EVERY_DAYS = 7;
@@ -57,27 +58,18 @@ function backupReminder(entryCount, lastBackupAt, now) {
   return days >= BACKUP_EVERY_DAYS ? `Last backup ${days} days ago` : null;
 }
 
-// Below this many entries the month fits on a screen, so no search box is shown.
-const SEARCH_FROM = 6;
-
-const LISTS = {
+const TABS = {
   all: { label: 'All', direction: null },
   paid: { label: 'Paid', direction: 'debit' },
   received: { label: 'Received', direction: 'credit' },
 };
-
-const NO_FILTERS = { categoryId: null, paymentMethod: null, accountId: null };
 
 const SORTS = [
   { value: 'latest', label: 'Latest', draw: ICONS.latest },
   { value: 'largest', label: 'Largest', draw: ICONS.largest },
 ];
 
-function plural(count, one, many) {
-  return `${count} ${count === 1 ? one : many}`;
-}
-
-/** The tiles' last line in the current month: "Today ₹200.00" (count in a pill) or "Nothing today". */
+/** The tiles' last line in the current month: "Today ₹200.00" or "Nothing today". */
 function todayText(paise) {
   return paise > 0 ? `Today ${formatINR(paise)}` : 'Nothing today';
 }
@@ -85,11 +77,11 @@ function todayText(paise) {
 export default function ExpensesScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
-  const [monthKey, setMonthKey] = useState(getMonthKey());
-  const [list, setList] = useState('all');
+  const [monthKey, setMonthKey] = useState(getMonthKey);
+  const [tab, setTab] = useState('all');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('latest');
-  const [filters, setFilters] = useState(NO_FILTERS);
+  const [paymentFilters, setPaymentFilters] = useState(NO_FILTERS);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const loader = useCallback(async () => {
@@ -105,8 +97,8 @@ export default function ExpensesScreen() {
         listCategories(db),
         listAccounts(db),
         listShopAccounts(db),
-        getQuietDays(db),
-        countEntries(db),
+        getDaysSinceLastMessage(db),
+        countTransactions(db),
         getLastBackupAt(db),
       ]);
     return {
@@ -117,6 +109,8 @@ export default function ExpensesScreen() {
       accounts,
       shopAccounts,
       quietDays,
+      // Today's totals only make sense while looking at the current month.
+      isThisMonth: monthKey === getMonthKey(),
       backupTitle: backupReminder(entryCount, lastBackupAt, Date.now()),
     };
   }, [db, monthKey]);
@@ -128,7 +122,7 @@ export default function ExpensesScreen() {
     (transaction) => router.push({ pathname: '/transaction/[id]', params: { id: transaction.id } }),
     [router],
   );
-  const addNew = (params) => router.push({ pathname: '/transaction/new', params });
+  const openNewEntry = (params) => router.push({ pathname: '/transaction/new', params });
 
   // Runs only on tap. `at` makes each tap a new navigation, so History re-applies the filter.
   function reviewMissingPurpose() {
@@ -147,18 +141,18 @@ export default function ExpensesScreen() {
         />
       );
     }
-    if (shown.length === 0 && filterCount > 0) {
+    if (shownEntries.length === 0 && filterCount > 0) {
       return (
         <EmptyState
           title="Nothing found"
           message="No entries match these filters this month."
           actionLabel="Clear filters"
-          onAction={() => setFilters(NO_FILTERS)}
+          onAction={() => setPaymentFilters(NO_FILTERS)}
         />
       );
     }
-    if (shown.length === 0) {
-      return term ? (
+    if (shownEntries.length === 0) {
+      return searchTerm ? (
         <EmptyState
           title="Nothing found"
           message={`Nothing matches "${search.trim()}" this month.`}
@@ -166,7 +160,7 @@ export default function ExpensesScreen() {
           onAction={() => setSearch('')}
         />
       ) : (
-        <EmptyState title="Nothing here yet" message={`No ${LISTS[list].label.toLowerCase()} entries this month.`} />
+        <EmptyState title="Nothing here yet" message={`No ${TABS[tab].label.toLowerCase()} entries this month.`} />
       );
     }
     return null;
@@ -176,52 +170,49 @@ export default function ExpensesScreen() {
   const renderRow = ({ item, index }) => (
     <View style={[styles.cardRow, index === 0 && styles.cardFirst, index === rows.length - 1 && styles.cardLast]}>
       <View style={index > 0 && styles.divider}>
-        <RepeatGroupRow group={item} onEdit={openTransaction} onDelete={deleteWithConfirm} />
+        <TransactionListItem group={item} onEdit={openTransaction} onDelete={deleteWithConfirm} />
       </View>
     </View>
   );
 
   // Filtered on the phone, so typing in search is instant. The sheet's filters
   // come first, so the tab counts follow them.
-  const filterCount = countFilters(filters);
-  // Today's totals only make sense while looking at the current month; past
-  // months show just the count by the tile's title.
-  const thisMonth = monthKey === getMonthKey();
-  const entries = (data?.entries ?? []).filter(
+  const filterCount = countFilters(paymentFilters);
+  const filteredEntries = (data?.entries ?? []).filter(
     (entry) =>
-      (filters.categoryId == null || entry.categoryId === filters.categoryId) &&
-      (filters.paymentMethod == null || entry.paymentMethod === filters.paymentMethod) &&
-      (filters.accountId == null || entry.accountId === filters.accountId),
+      (paymentFilters.categoryId == null || entry.categoryId === paymentFilters.categoryId) &&
+      (paymentFilters.paymentMethod == null || entry.paymentMethod === paymentFilters.paymentMethod) &&
+      (paymentFilters.accountId == null || entry.accountId === paymentFilters.accountId),
   );
   // Tapping the selected choice again clears that filter.
   const toggleFilter = (key, value) =>
-    setFilters((current) => ({ ...current, [key]: current[key] === value ? null : value }));
+    setPaymentFilters((current) => ({ ...current, [key]: current[key] === value ? null : value }));
   function clearSheet() {
-    setFilters(NO_FILTERS);
+    setPaymentFilters(NO_FILTERS);
     setSort('latest');
   }
-  const inList = (name) =>
-    LISTS[name].direction ? entries.filter((entry) => entry.direction === LISTS[name].direction) : entries;
+  const entriesInTab = (name) =>
+    TABS[name].direction
+      ? filteredEntries.filter((entry) => entry.direction === TABS[name].direction)
+      : filteredEntries;
   // Matches any part of the name or purpose, ignoring case.
-  const term = search.trim().toLowerCase();
-  const matching = inList(list).filter(
+  const searchTerm = search.trim().toLowerCase();
+  const shownEntries = entriesInTab(tab).filter(
     (entry) =>
-      !term ||
-      (entry.merchant ?? '').toLowerCase().includes(term) ||
-      (entry.purpose ?? '').toLowerCase().includes(term),
+      !searchTerm ||
+      (entry.merchant ?? '').toLowerCase().includes(searchTerm) ||
+      (entry.purpose ?? '').toLowerCase().includes(searchTerm),
   );
-  // Entries come newest first; sorting by Largest re-orders them (newest first on a tie).
-  const shown = sort === 'largest' ? [...matching].sort((a, b) => b.amountPaise - a.amountPaise) : matching;
-  // Repeat purchases (same name, category and day) share one row; Largest orders by the row's total.
-  const grouped = groupRepeats(matching);
+  // Repeat purchases (same name, category and day) share one row. Entries come newest
+  // first; Largest orders by the row's total (newest first on a tie).
+  const grouped = groupRepeats(shownEntries);
   const rows = sort === 'largest' ? [...grouped].sort((a, b) => b.totalPaise - a.totalPaise) : grouped;
-  // Totals of what is shown, for the line under the Filters button.
-  const sum = (direction) =>
-    shown.filter((entry) => entry.direction === direction).reduce((total, entry) => total + entry.amountPaise, 0);
-  const options = Object.entries(LISTS).map(([value, { label }]) => ({
+  const tabOptions = Object.entries(TABS).map(([value, { label }]) => ({
     value,
-    label: `${label} (${inList(value).length})`,
+    label: `${label} (${entriesInTab(value).length})`,
   }));
+  const shownCountText = plural(shownEntries.length, 'entry', 'entries');
+  const quietText = `No bank SMS read for ${data?.quietDays} days`;
 
   const header = (
     <View style={styles.header}>
@@ -240,9 +231,9 @@ export default function ExpensesScreen() {
               direction="debit"
               action="Add expense"
               zeroText="Nothing spent"
-              subText={thisMonth ? todayText(data.todayTotals.totalPaise) : null}
+              subText={data.isThisMonth ? todayText(data.todayTotals.totalPaise) : null}
               subCount={data.todayTotals.count}
-              onPress={() => addNew({})}
+              onPress={() => openNewEntry({})}
             />
             <TotalTile
               label="Received"
@@ -251,13 +242,13 @@ export default function ExpensesScreen() {
               direction="credit"
               action="Add income"
               zeroText="Nothing received"
-              subText={thisMonth ? todayText(data.todayReceived.totalPaise) : null}
+              subText={data.isThisMonth ? todayText(data.todayReceived.totalPaise) : null}
               subCount={data.todayReceived.count}
-              onPress={() => addNew({ direction: 'credit' })}
+              onPress={() => openNewEntry({ direction: 'credit' })}
             />
           </View>
 
-          {/* Review first: those payments are not counted until added. */}
+          {/* Review comes first: those payments are not counted until added. */}
           <TodoCard
             items={[
               data.pendingCount > 0 && {
@@ -273,10 +264,10 @@ export default function ExpensesScreen() {
               data.quietDays != null && {
                 key: 'detection',
                 icon: 'detection',
-                title: `No bank SMS read for ${data.quietDays} days`,
+                title: quietText,
                 action: 'Check',
-                message: `No bank SMS read for ${data.quietDays} days. Payment detection may have stopped`,
-                onPress: () => router.push('/auto-detect'),
+                message: `${quietText}. Payment detection may have stopped`,
+                onPress: () => router.push('/payment-detection'),
               },
               data.missingPurposeCount > 0 && {
                 key: 'purpose',
@@ -300,49 +291,35 @@ export default function ExpensesScreen() {
 
           {/* Shops where you take now and pay later (More → Shop accounts). */}
           {data.shopAccounts.map((account) => (
-            <ShopAccountStrip
+            <ShopAccountRow
               key={account.id}
               account={account}
               onChanged={reload}
-              onOpenStatement={() => router.push({ pathname: '/shop/[id]', params: { id: account.id } })}
+              onOpenStatement={() => router.push({ pathname: '/shops/[id]', params: { id: account.id } })}
             />
           ))}
 
-          {(data.entries ?? []).length > 0 ? (
+          {data.entries.length > 0 ? (
             <>
-              <SegmentedControl options={options} value={list} onChange={setList} />
-              <View style={styles.searchLine}>
-                {/* Stays while it has text, so a search you typed can always be seen and cleared. */}
-                {entries.length >= SEARCH_FROM || search.trim() ? (
-                  <TextField
-                    value={search}
-                    onChangeText={setSearch}
-                    placeholder="Search by name or purpose"
-                    returnKeyType="search"
-                    autoCorrect={false}
-                    accessibilityLabel="Search by name or purpose"
-                    style={styles.search}
-                  />
-                ) : null}
-                <FilterButton count={filterCount + (sort === 'latest' ? 0 : 1)} onPress={() => setFiltersOpen(true)} />
-              </View>
-              {filterCount > 0 ? (
-                <Text style={styles.summary}>
-                  {`${plural(shown.length, 'entry', 'entries')} · Spent `}
-                  <Amount paise={sum('debit')} direction="debit" size="sm" />
-                  {' · Received '}
-                  <Amount paise={sum('credit')} direction="credit" size="sm" />
-                </Text>
-              ) : null}
+              <SegmentedControl options={tabOptions} value={tab} onChange={setTab} />
+              <SearchFilterBar
+                itemCount={filteredEntries.length}
+                search={search}
+                onSearch={setSearch}
+                placeholder="Search by name or purpose"
+                filterCount={filterCount + (sort === 'latest' ? 0 : 1)}
+                onOpenFilters={() => setFiltersOpen(true)}
+              />
+              {filterCount > 0 ? <TotalsLine entries={shownEntries} countText={shownCountText} /> : null}
               <FilterSheet
                 visible={filtersOpen}
                 onClose={() => setFiltersOpen(false)}
                 onClear={clearSheet}
-                showLabel={`Show ${plural(shown.length, 'entry', 'entries')}`}
+                showLabel={`Show ${shownCountText}`}
               >
                 <ChoiceRow label="Sort by" choices={SORTS} value={sort} onSelect={setSort} />
                 <PaymentFilters
-                  filters={filters}
+                  filters={paymentFilters}
                   onToggle={toggleFilter}
                   categories={data.categories}
                   accounts={data.accounts}
@@ -357,10 +334,10 @@ export default function ExpensesScreen() {
 
   const footer = data ? (
     <View style={styles.footer}>
-      {shown.length > 0 ? (
+      {shownEntries.length > 0 ? (
         <Text style={styles.hint}>Tip: swipe a row right to edit it, or left to delete it.</Text>
       ) : null}
-      {(data.entries ?? []).length > 0 ? (
+      {data.entries.length > 0 ? (
         <View style={styles.viewAll}>
           <TextLink label="View all in History ›" onPress={() => router.navigate('/history')} />
         </View>
@@ -413,11 +390,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
   },
   totals: { flexDirection: 'row', gap: spacing.md },
-  // Search on the left, Filters on the right (alone on the right when there is no search box).
-  searchLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.sm },
-  search: { flex: 1 },
   divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   hint: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: 'center' },
-  summary: { fontSize: fontSize.sm, color: colors.textMuted },
   viewAll: { alignItems: 'center' },
 });

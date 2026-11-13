@@ -1,34 +1,44 @@
-// Backup and restore: all your data as one JSON object, so it can be saved
-// to a file and brought back on this or a new phone.
-// Captured bank messages (detected_payments) are left out: they hold the raw
-// SMS text, and everything you added from them is already in transactions.
+// Backup and restore: all your data as one JSON object for a file.
+// Captured bank messages (detected_payments) are left out: they hold raw SMS
+// text, and what you added from them is already in transactions.
 
-import { INCOME, UNCATEGORIZED } from '../domain/categorize.js';
-import { LOANS_CATEGORY } from '../domain/loans.js';
-import { DEVICE_PREFIX } from './deviceSettings.js';
+import { PHONE_PREFIX } from './phoneSettings.js';
 import { LATEST_VERSION } from './migrations.js';
+import { INCOME, UNCATEGORIZED, LOANS_CATEGORY } from '../constants/categories.js';
+import { placeholders } from './sql.js';
 
 const BACKUP_APP = 'upi-expense-tracker';
 const BACKUP_FORMAT = 1;
 
 // Parents before children, so foreign keys always find their row on restore.
-const TABLES = ['categories', 'accounts', 'shop_accounts', 'templates', 'transactions', 'name_memory', 'settings'];
+const BACKUP_TABLES = [
+  'categories',
+  'accounts',
+  'shop_accounts',
+  'templates',
+  'transactions',
+  'name_memory',
+  'settings',
+];
 
 const LAST_BACKUP_KEY = 'last_backup_at';
+
+// Settings a backup leaves out and a restore leaves alone: the last backup
+// time, and this phone's own settings (see phoneSettings.js).
+function isPhoneOnlySetting(key) {
+  return key === LAST_BACKUP_KEY || String(key ?? '').startsWith(PHONE_PREFIX);
+}
+// The same rule in SQL: every other setting.
+const SHARED_SETTINGS = { sql: 'key <> ? AND key NOT LIKE ?', params: [LAST_BACKUP_KEY, `${PHONE_PREFIX}%`] };
 
 /** The whole database as a plain object, ready for JSON.stringify. */
 export async function buildBackup(db, now = Date.now()) {
   const version = await db.getFirstAsync('PRAGMA user_version');
   const tables = {};
-  for (const table of TABLES) {
-    // Left out: the last backup time, and settings that belong to this phone
-    // only (app lock, the automatic backup folder; see deviceSettings.js).
+  for (const table of BACKUP_TABLES) {
     tables[table] =
       table === 'settings'
-        ? await db.getAllAsync('SELECT * FROM settings WHERE key <> ? AND key NOT LIKE ?', [
-            LAST_BACKUP_KEY,
-            `${DEVICE_PREFIX}%`,
-          ])
+        ? await db.getAllAsync(`SELECT * FROM settings WHERE ${SHARED_SETTINGS.sql}`, SHARED_SETTINGS.params)
         : await db.getAllAsync(`SELECT * FROM ${table}`);
   }
   return {
@@ -51,7 +61,7 @@ export async function getLastBackupAt(db) {
 }
 
 /** How many entries are on this phone, to compare with a backup before replacing. */
-export async function countEntries(db) {
+export async function countTransactions(db) {
   const row = await db.getFirstAsync('SELECT COUNT(*) AS count FROM transactions');
   return row?.count ?? 0;
 }
@@ -70,7 +80,7 @@ export function checkBackup(backup) {
   if (!Number.isInteger(backup.schemaVersion) || backup.schemaVersion > LATEST_VERSION) {
     return { error: 'This backup is from a newer version of the app. Update the app first, then restore.' };
   }
-  for (const table of TABLES) {
+  for (const table of BACKUP_TABLES) {
     const rows = backup.tables[table] ?? [];
     if (!Array.isArray(rows) || rows.some((row) => typeof row !== 'object' || row === null)) {
       return { error: 'This backup file is damaged.' };
@@ -97,19 +107,17 @@ export async function restoreBackup(db, backup) {
   await db.withExclusiveTransactionAsync(async (txn) => {
     // Children before parents, so nothing is left pointing at a deleted row.
     await txn.runAsync('DELETE FROM detected_payments');
-    for (const table of [...TABLES].reverse()) {
-      // This phone's own settings stay as they are through a restore.
+    for (const table of [...BACKUP_TABLES].reverse()) {
       await txn.runAsync(
-        table === 'settings' ? 'DELETE FROM settings WHERE key <> ? AND key NOT LIKE ?' : `DELETE FROM ${table}`,
-        table === 'settings' ? [LAST_BACKUP_KEY, `${DEVICE_PREFIX}%`] : [],
+        table === 'settings' ? `DELETE FROM settings WHERE ${SHARED_SETTINGS.sql}` : `DELETE FROM ${table}`,
+        table === 'settings' ? SHARED_SETTINGS.params : [],
       );
     }
-    for (const table of TABLES) {
-      // Only columns this version of the app knows; names come from the
-      // database itself, never from the file, so they are safe in the SQL.
+    for (const table of BACKUP_TABLES) {
+      // Only columns this app version knows. Names come from the database, never the file.
       const known = (await txn.getAllAsync(`PRAGMA table_info(${table})`)).map((column) => column.name);
       for (const row of backup.tables[table] ?? []) {
-        if (table === 'settings' && (row.key === LAST_BACKUP_KEY || String(row.key ?? '').startsWith(DEVICE_PREFIX))) {
+        if (table === 'settings' && isPhoneOnlySetting(row.key)) {
           continue;
         }
         const columns = known.filter((name) => name in row);
@@ -117,14 +125,12 @@ export async function restoreBackup(db, backup) {
           continue;
         }
         await txn.runAsync(
-          `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+          `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders(columns.length)})`,
           columns.map((name) => row[name]),
         );
       }
     }
-    // Categories the app relies on were added in later versions (3 and 4). A
-    // backup from before that does not have them, and without Loans money
-    // given or taken could not be saved. Already there: left as it is.
+    // Built-in categories added in versions 3 and 4 may be missing from an older backup.
     for (const name of [INCOME, UNCATEGORIZED, LOANS_CATEGORY]) {
       await txn.runAsync(
         `INSERT OR IGNORE INTO categories (name, is_default, sort_order, created_at)

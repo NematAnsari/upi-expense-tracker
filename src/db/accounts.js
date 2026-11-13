@@ -2,6 +2,19 @@
 // bank messages, or added by hand with just a name. Full account numbers are
 // never stored.
 
+import { MAX_ACCOUNT_NAME_LENGTH } from '../domain/validation.js';
+
+/** The nickname trimmed and cut to the limit. Throws when it is empty. */
+function cleanNickname(rawNickname) {
+  const nickname = String(rawNickname ?? '')
+    .trim()
+    .slice(0, MAX_ACCOUNT_NAME_LENGTH);
+  if (nickname === '') {
+    throw new Error('Enter a name for this account.');
+  }
+  return nickname;
+}
+
 export async function listAccounts(db) {
   return db.getAllAsync(
     'SELECT id, bank_name AS bankName, last4, nickname FROM accounts ORDER BY nickname COLLATE NOCASE',
@@ -35,12 +48,7 @@ export async function findOrCreateAccount(db, { bankName, bankShort, last4 }) {
  * already used (ignoring case). Returns the new account.
  */
 export async function createAccount(db, rawNickname) {
-  const nickname = String(rawNickname ?? '')
-    .trim()
-    .slice(0, 40);
-  if (nickname === '') {
-    throw new Error('Enter a name for this account.');
-  }
+  const nickname = cleanNickname(rawNickname);
   const taken = await db.getFirstAsync('SELECT id FROM accounts WHERE lower(nickname) = lower(?)', [nickname]);
   if (taken) {
     throw new Error('You already have an account with this name.');
@@ -53,9 +61,5 @@ export async function createAccount(db, rawNickname) {
 }
 
 export async function renameAccount(db, id, rawNickname) {
-  const nickname = String(rawNickname ?? '').trim();
-  if (nickname === '') {
-    throw new Error('Enter a name for this account.');
-  }
-  await db.runAsync('UPDATE accounts SET nickname = ? WHERE id = ?', [nickname.slice(0, 40), id]);
+  await db.runAsync('UPDATE accounts SET nickname = ? WHERE id = ?', [cleanNickname(rawNickname), id]);
 }

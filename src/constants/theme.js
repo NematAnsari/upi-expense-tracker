@@ -1,4 +1,4 @@
-// One place for colours and sizes, so every screen looks the same.
+// One place for colors and sizes, so every screen looks the same.
 
 export const colors = {
   background: '#F4F6F8',
@@ -7,11 +7,11 @@ export const colors = {
   textMuted: '#6B7280',
   border: '#E5E7EB',
 
-  // Brand colour for buttons, links and selected chips.
+  // Brand color for buttons, links and selected chips.
   primary: '#0F766E',
   primarySoft: '#E6F4F2',
   onPrimary: '#FFFFFF',
-  // Brand colour that stays readable on a dark background (the Undo bar).
+  // Brand color that stays readable on a dark background (the Undo bar).
   primaryOnDark: '#7DD3C0',
 
   // Money. Always use these (or the Amount component) for amounts:
@@ -34,8 +34,8 @@ export const colors = {
   warningSoft: '#FEF3C7',
 };
 
-// Reports ring chart: one colour per category slice, in this fixed order
-// (largest first), then grey for the rest. Checked for colour-blind safety
+// Reports ring chart: one color per category slice, in this fixed order
+// (largest first), then grey for the rest. Checked for color-blind safety
 // on the white card; every slice is also named with its % next to it.
 export const chartColors = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4'];
 export const chartOtherColor = '#c3c2b7';
@@ -64,7 +64,7 @@ export const fontSize = {
   xxl: 30,
 };
 
-/** Text colour for an amount: red for money paid, green for money received. */
+/** Text color for an amount: red for money paid, green for money received. */
 export function amountColor(direction) {
   return direction === 'credit' ? colors.income : colors.expense;
 }

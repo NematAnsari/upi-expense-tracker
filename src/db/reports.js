@@ -1,33 +1,40 @@
-// Spending calculations shared by the Dashboard and Reports screens.
-// Only 'debit' rows are expenses. Incoming payments ('credit') are never counted.
-// Loans (money lent, borrowed or paid back) are neither spending nor income,
-// so they are left out of both; see getLoanBalances for them.
+// Spending and income totals for the Expenses and Reports tabs. Money given
+// or taken and shop payments are never counted (see IS_SPENDING in sql.js).
 
-import { currentDueAt, describeBalance, findReturnProblem, maxReturnPaise, settlementDates } from '../domain/loans.js';
-import { getDayRange, getMonthRange, getWeekBuckets, shiftMonth } from '../utils/dates.js';
-import { averagePaise, formatINR, percentOf } from '../utils/money.js';
-import { NOT_SHOP_PAYMENT, SELECT_TRANSACTION, listTransactions } from './transactions.js';
+import { getDayRange, getMonthRange, getWeeksOfMonth, shiftMonth } from '../utils/dates.js';
+import { averagePaise, percentOf } from '../utils/money.js';
+import { IS_INCOME, IS_SPENDING, NEEDS_PURPOSE } from './sql.js';
+import { SELECT_TRANSACTION } from './transactions.js';
 
-// Spending: money paid that is not money given or taken, and not a payment to a shop account.
-const IN_RANGE = `t.direction = 'debit' AND t.loan_type IS NULL AND ${NOT_SHOP_PAYMENT} AND t.occurred_at >= ? AND t.occurred_at < ?`;
+const IN_RANGE = 't.occurred_at >= ? AND t.occurred_at < ?';
 
+/** { totalPaise, count } of spending in a time range. */
 export async function getSpendingTotals(db, startMs, endMs) {
   const row = await db.getFirstAsync(
     `SELECT COALESCE(SUM(t.amount_paise), 0) AS totalPaise, COUNT(*) AS count
-     FROM transactions t WHERE ${IN_RANGE}`,
+     FROM transactions t WHERE ${IS_SPENDING} AND ${IN_RANGE}`,
     [startMs, endMs],
   );
   return { totalPaise: row?.totalPaise ?? 0, count: row?.count ?? 0 };
 }
 
-/** Per-category totals, largest first, each with its share of the overall total. */
-export async function getCategoryTotals(db, startMs, endMs) {
+/** { totalPaise, count } of income in a time range. */
+async function getIncomeTotals(db, startMs, endMs) {
+  const row = await db.getFirstAsync(
+    `SELECT COALESCE(SUM(t.amount_paise), 0) AS totalPaise, COUNT(*) AS count
+     FROM transactions t WHERE ${IS_INCOME} AND ${IN_RANGE}`,
+    [startMs, endMs],
+  );
+  return { totalPaise: row?.totalPaise ?? 0, count: row?.count ?? 0 };
+}
+
+/** Spending per category, largest first, each with its share of the total. */
+async function getCategoryTotals(db, startMs, endMs) {
   const rows = await db.getAllAsync(
-    `SELECT c.id AS categoryId, c.name AS categoryName,
-            SUM(t.amount_paise) AS totalPaise, COUNT(*) AS count
+    `SELECT c.id AS categoryId, c.name AS categoryName, SUM(t.amount_paise) AS totalPaise, COUNT(*) AS count
      FROM transactions t
      JOIN categories c ON c.id = t.category_id
-     WHERE ${IN_RANGE}
+     WHERE ${IS_SPENDING} AND ${IN_RANGE}
      GROUP BY c.id, c.name
      ORDER BY totalPaise DESC, c.name`,
     [startMs, endMs],
@@ -36,242 +43,55 @@ export async function getCategoryTotals(db, startMs, endMs) {
   return rows.map((row) => ({ ...row, percent: percentOf(row.totalPaise, overall) }));
 }
 
-export async function getHighestExpense(db, startMs, endMs) {
+async function getHighestExpense(db, startMs, endMs) {
   return db.getFirstAsync(
-    `${SELECT_TRANSACTION} WHERE ${IN_RANGE}
+    `${SELECT_TRANSACTION} WHERE ${IS_SPENDING} AND ${IN_RANGE}
      ORDER BY t.amount_paise DESC, t.occurred_at DESC LIMIT 1`,
     [startMs, endMs],
   );
 }
 
+/** Spending per week of the month: [{ label, totalPaise, count }]. */
 async function getWeeklyTotals(db, monthKey) {
   const { startMs, endMs } = getMonthRange(monthKey);
   const rows = await db.getAllAsync(
     `SELECT t.amount_paise AS amountPaise, t.occurred_at AS occurredAt
-     FROM transactions t WHERE ${IN_RANGE}`,
+     FROM transactions t WHERE ${IS_SPENDING} AND ${IN_RANGE}`,
     [startMs, endMs],
   );
-  return getWeekBuckets(monthKey).map((bucket) => {
-    const inBucket = rows.filter((row) => row.occurredAt >= bucket.startMs && row.occurredAt < bucket.endMs);
+  return getWeeksOfMonth(monthKey).map((week) => {
+    const inWeek = rows.filter((row) => row.occurredAt >= week.startMs && row.occurredAt < week.endMs);
     return {
-      label: bucket.label,
-      totalPaise: inBucket.reduce((sum, row) => sum + row.amountPaise, 0),
-      count: inBucket.length,
+      label: week.label,
+      totalPaise: inWeek.reduce((sum, row) => sum + row.amountPaise, 0),
+      count: inWeek.length,
     };
   });
 }
 
 async function countMissingPurpose(db, startMs, endMs) {
   const row = await db.getFirstAsync(
-    `SELECT COUNT(*) AS count FROM transactions t WHERE ${IN_RANGE} AND t.purpose IS NULL AND t.shop_entry IS NULL`,
+    `SELECT COUNT(*) AS count FROM transactions t WHERE ${NEEDS_PURPOSE} AND ${IN_RANGE}`,
     [startMs, endMs],
   );
   return row?.count ?? 0;
 }
 
-/** Money received (credits) in a range. Kept separate from spending. */
-export async function getReceivedTotals(db, startMs, endMs) {
-  const row = await db.getFirstAsync(
-    `SELECT COALESCE(SUM(t.amount_paise), 0) AS totalPaise, COUNT(*) AS count
-     FROM transactions t
-     WHERE t.direction = 'credit' AND t.loan_type IS NULL AND t.occurred_at >= ? AND t.occurred_at < ?`,
-    [startMs, endMs],
-  );
-  return { totalPaise: row?.totalPaise ?? 0, count: row?.count ?? 0 };
-}
-
-// Net per person: above 0 they have money to return to you, below 0 you have money to return to them.
-const NET_PAISE = `SUM(CASE loan_type
-       WHEN 'lent' THEN amount_paise
-       WHEN 'lent_repaid' THEN -amount_paise
-       WHEN 'borrowed' THEN -amount_paise
-       WHEN 'borrowed_repaid' THEN amount_paise
-     END)`;
-
-/**
- * One person's net amount (same rule and name matching as getLoanBalances),
- * leaving out one entry (the one being edited) when excludeId is given.
- */
-export async function getPersonNetPaise(db, person, excludeId = null) {
-  const row = await db.getFirstAsync(
-    `SELECT COALESCE(${NET_PAISE}, 0) AS netPaise
-     FROM transactions
-     WHERE loan_type IS NOT NULL AND lower(trim(merchant)) = lower(trim(?)) AND id IS NOT ?`,
-    [person, excludeId],
-  );
-  return row?.netPaise ?? 0;
-}
-
-/**
- * Money received back or returned cannot be more than the person's remaining
- * amount. Returns an error message for the amount field, or null when it is fine.
- * excludeId: the entry being edited, so its old amount is not counted twice.
- */
-export async function checkReturnAmount(db, values, excludeId = null) {
-  if (values.loanType !== 'lent_repaid' && values.loanType !== 'borrowed_repaid') {
-    return null;
-  }
-  const netPaise = await getPersonNetPaise(db, values.merchant, excludeId);
-  const maxPaise = maxReturnPaise(values.loanType, netPaise);
-  if (values.amountPaise <= maxPaise) {
-    return null;
-  }
-  if (maxPaise === 0) {
-    return values.loanType === 'lent_repaid'
-      ? `${values.merchant} has no money to return to you.`
-      : `You have no money to return to ${values.merchant}.`;
-  }
-  return `Remaining amount is ${formatINR(maxPaise)}. Enter ${formatINR(maxPaise)} or less.`;
-}
-
-/**
- * Editing or deleting money given or taken (or money received back or
- * returned) must not leave a person on the wrong side: money received back or
- * returned can never be more than there was to receive or return when it
- * happened (see findReturnProblem). Example: Amit gave back all ₹1,000, so the
- * ₹1,000 you gave him cannot be lowered to ₹500 or deleted.
- *
- * removeIds: entries about to be deleted.
- * edit: { id, values } for an entry about to change (values from validateTransactionForm).
- * Only a change that newly breaks a person is refused. A person who was
- * already inconsistent before (for example from an entry dated in the past)
- * can still be edited. Returns an error message, or null when it is fine.
- */
-export async function checkLoanChange(db, { removeIds = [], edit = null }) {
-  const ids = [...removeIds, ...(edit ? [edit.id] : [])];
-  const keys = new Set();
-  if (ids.length > 0) {
-    const rows = await db.getAllAsync(
-      `SELECT DISTINCT lower(trim(merchant)) AS key FROM transactions
-       WHERE loan_type IS NOT NULL AND merchant IS NOT NULL AND id IN (${ids.map(() => '?').join(', ')})`,
-      ids,
-    );
-    rows.forEach((row) => keys.add(row.key));
-  }
-  // The same name matching SQL uses everywhere else (lower and trim).
-  let newKey = null;
-  if (edit?.values?.loanType && edit.values.merchant) {
-    newKey = (await db.getFirstAsync('SELECT lower(trim(?)) AS key', [edit.values.merchant])).key;
-    keys.add(newKey);
-  }
-
-  for (const key of keys) {
-    const entries = await db.getAllAsync(
-      `SELECT id, merchant, loan_type AS loanType, amount_paise AS amountPaise, occurred_at AS occurredAt
-       FROM transactions WHERE loan_type IS NOT NULL AND lower(trim(merchant)) = ?`,
-      [key],
-    );
-    const after = entries.filter((entry) => !removeIds.includes(entry.id) && entry.id !== edit?.id);
-    if (key === newKey) {
-      after.push({
-        id: edit.id,
-        loanType: edit.values.loanType,
-        amountPaise: edit.values.amountPaise,
-        occurredAt: edit.values.occurredAt,
-      });
-    }
-    const problem = findReturnProblem(after);
-    if (!problem || findReturnProblem(entries)) {
-      continue;
-    }
-    const name = (key === newKey ? edit.values.merchant : entries[0]?.merchant)?.trim() ?? 'this person';
-    return problem.entry.loanType === 'lent_repaid'
-      ? `Money received back from ${name} would be more than they had to return to you. Change or delete the money received back first.`
-      : `Money returned to ${name} would be more than you had to return to them. Change or delete the money returned first.`;
-  }
-  return null;
-}
-
-/**
- * Loan balance per person, from all time (loans do not belong to one month).
- * People are matched by name, ignoring case and spaces at the ends.
- * Returns { people: [{ person, netPaise, status, amountPaise, lastAt, count,
- *           givenPaise, receivedBackPaise, takenPaise, returnedPaise,
- *           openSinceAt, settledAt, settledFromAt, dueAt }],
- *           owedToYouPaise, youOwePaise, givenTodayPaise, takenTodayPaise }.
- * givenTodayPaise / takenTodayPaise: money given and taken today (by `now`).
- * openSinceAt / settledAt / settledFromAt: see settlementDates in domain/loans.js.
- * dueAt: the "return by" date of the amount still open, or null (see currentDueAt, dueText).
- * Settled people (net 0) are listed last.
- */
-export async function getLoanBalances(db, now = new Date()) {
-  // With MAX(occurred_at), SQLite takes `merchant` (the spelling) from the latest entry.
-  // `key` is the same lower(trim()) SQLite uses to group, so both queries match people alike.
-  const rows = await db.getAllAsync(
-    `SELECT
-       lower(trim(merchant)) AS key,
-       merchant AS person,
-       ${NET_PAISE} AS netPaise,
-       SUM(CASE WHEN loan_type = 'lent' THEN amount_paise ELSE 0 END) AS givenPaise,
-       SUM(CASE WHEN loan_type = 'lent_repaid' THEN amount_paise ELSE 0 END) AS receivedBackPaise,
-       SUM(CASE WHEN loan_type = 'borrowed' THEN amount_paise ELSE 0 END) AS takenPaise,
-       SUM(CASE WHEN loan_type = 'borrowed_repaid' THEN amount_paise ELSE 0 END) AS returnedPaise,
-       MAX(occurred_at) AS lastAt,
-       COUNT(*) AS count
-     FROM transactions
-     WHERE loan_type IS NOT NULL AND merchant IS NOT NULL AND trim(merchant) <> ''
-     GROUP BY lower(trim(merchant))`,
-  );
-  const entries = await db.getAllAsync(
-    `SELECT id, lower(trim(merchant)) AS key, loan_type AS loanType, amount_paise AS amountPaise,
-            occurred_at AS occurredAt, due_at AS dueAt
-     FROM transactions
-     WHERE loan_type IS NOT NULL AND merchant IS NOT NULL AND trim(merchant) <> ''`,
-  );
-  const entriesByKey = {};
-  for (const entry of entries) {
-    (entriesByKey[entry.key] ??= []).push(entry);
-  }
-
-  const people = rows
-    .map(({ key, ...row }) => {
-      const dates = settlementDates(entriesByKey[key] ?? []);
-      return {
-        ...row,
-        person: row.person.trim(),
-        ...describeBalance(row.netPaise),
-        ...dates,
-        dueAt: currentDueAt(entriesByKey[key] ?? [], dates.openSinceAt),
-      };
-    })
-    .sort((a, b) => (a.status === 'settled') - (b.status === 'settled') || b.lastAt - a.lastAt);
-
-  const today = getDayRange(now);
-  const todayTotal = (loanType) =>
-    entries
-      .filter(
-        (entry) => entry.loanType === loanType && entry.occurredAt >= today.startMs && entry.occurredAt < today.endMs,
-      )
-      .reduce((sum, entry) => sum + entry.amountPaise, 0);
-
-  return {
-    people,
-    owedToYouPaise: people.filter((p) => p.status === 'owesYou').reduce((sum, p) => sum + p.amountPaise, 0),
-    youOwePaise: people.filter((p) => p.status === 'youOwe').reduce((sum, p) => sum + p.amountPaise, 0),
-    givenTodayPaise: todayTotal('lent'),
-    takenTodayPaise: todayTotal('borrowed'),
-  };
-}
-
+/** The Expenses tab's numbers: the month's and today's spending and income, and expenses missing a purpose. */
 export async function getDashboardData(db, monthKey, now = new Date()) {
   const month = getMonthRange(monthKey);
   const today = getDayRange(now);
-
-  const [monthTotals, todayTotals, receivedTotals, todayReceived, categories, recent, missingPurposeCount] =
-    await Promise.all([
-      getSpendingTotals(db, month.startMs, month.endMs),
-      getSpendingTotals(db, today.startMs, today.endMs),
-      getReceivedTotals(db, month.startMs, month.endMs),
-      getReceivedTotals(db, today.startMs, today.endMs),
-      getCategoryTotals(db, month.startMs, month.endMs),
-      // Expenses and income only: money given and taken has its own tab.
-      listTransactions(db, { startMs: month.startMs, endMs: month.endMs, kind: 'regular', limit: 5 }),
-      countMissingPurpose(db, month.startMs, month.endMs),
-    ]);
-
-  return { monthTotals, todayTotals, receivedTotals, todayReceived, categories, recent, missingPurposeCount };
+  const [monthTotals, todayTotals, receivedTotals, todayReceived, missingPurposeCount] = await Promise.all([
+    getSpendingTotals(db, month.startMs, month.endMs),
+    getSpendingTotals(db, today.startMs, today.endMs),
+    getIncomeTotals(db, month.startMs, month.endMs),
+    getIncomeTotals(db, today.startMs, today.endMs),
+    countMissingPurpose(db, month.startMs, month.endMs),
+  ]);
+  return { monthTotals, todayTotals, receivedTotals, todayReceived, missingPurposeCount };
 }
 
+/** Everything the Reports tab shows for one month, with last month for comparison. */
 export async function getMonthlyReport(db, monthKey) {
   const month = getMonthRange(monthKey);
   const previousMonthKey = shiftMonth(monthKey, -1);
@@ -280,12 +100,11 @@ export async function getMonthlyReport(db, monthKey) {
   const [totals, previousTotals, received, categories, highest, weeks] = await Promise.all([
     getSpendingTotals(db, month.startMs, month.endMs),
     getSpendingTotals(db, previous.startMs, previous.endMs),
-    getReceivedTotals(db, month.startMs, month.endMs),
+    getIncomeTotals(db, month.startMs, month.endMs),
     getCategoryTotals(db, month.startMs, month.endMs),
     getHighestExpense(db, month.startMs, month.endMs),
     getWeeklyTotals(db, monthKey),
   ]);
-
   const changePaise = totals.totalPaise - previousTotals.totalPaise;
 
   return {
@@ -302,7 +121,7 @@ export async function getMonthlyReport(db, monthKey) {
       previousMonthKey,
       previousTotalPaise: previousTotals.totalPaise,
       changePaise,
-      // null when last month had no spending: a percentage change is meaningless then.
+      // No percent when last month had no spending.
       changePercent: previousTotals.totalPaise > 0 ? percentOf(changePaise, previousTotals.totalPaise) : null,
     },
   };

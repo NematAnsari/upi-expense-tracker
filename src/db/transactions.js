@@ -1,8 +1,7 @@
-// Every query uses `?` placeholders. Values are passed separately, never pasted
-// into the SQL string, which prevents SQL injection and quoting bugs.
+// Saving, reading and deleting entries (expenses, income, money given and
+// taken, shop items and payments).
 
-// Paying a shop account only lowers what is due there; it is never spending.
-export const NOT_SHOP_PAYMENT = "t.shop_entry IS NOT 'payment'";
+import { NEEDS_PURPOSE, NOT_SHOP_PAYMENT, placeholders } from './sql.js';
 
 export const SELECT_TRANSACTION = `
   SELECT
@@ -31,18 +30,25 @@ export const SELECT_TRANSACTION = `
   LEFT JOIN shop_accounts s ON s.id = t.shop_account_id
 `;
 
+// What each `kind` filter keeps. Expenses and income leave out money given or
+// taken and shop payments.
+const KIND_FILTERS = {
+  regular: [`t.loan_type IS NULL AND ${NOT_SHOP_PAYMENT}`],
+  paid: [`t.loan_type IS NULL AND ${NOT_SHOP_PAYMENT} AND t.direction = ?`, 'debit'],
+  received: [`t.loan_type IS NULL AND ${NOT_SHOP_PAYMENT} AND t.direction = ?`, 'credit'],
+  given: ["t.loan_type IN ('lent', 'lent_repaid')"],
+  taken: ["t.loan_type IN ('borrowed', 'borrowed_repaid')"],
+};
+
 /**
- * Lists transactions with optional filters.
- * startMs/endMs: time range (end exclusive). categoryId: one category.
- * search: matches purpose or merchant, case-insensitive. sort: 'desc' | 'asc'.
- * missingPurpose: only expenses with no purpose yet, so they can be filled in.
- * accountId: one bank account. direction: 'debit' (paid) or 'credit' (received).
- * paymentMethod: one method ('UPI', 'Cash', 'Card' or 'Other').
- * loansOnly: only money lent, borrowed or paid back.
- * person: only this name, ignoring case and spaces at the ends (as getLoanBalances matches people).
- * kind: 'regular' (expenses and income), 'paid' (expenses), 'received' (income),
- * 'given' (money given and received back) or 'taken' (money taken and returned).
- * Regular, paid and received leave money given and taken out.
+ * Lists entries, newest first unless sort is 'asc'. All filters are optional:
+ * - startMs, endMs: time range (end not included)
+ * - kind: 'regular' (expenses and income), 'paid', 'received', 'given' or 'taken'
+ * - categoryId, accountId, paymentMethod, direction: one of each
+ * - search: part of the purpose or name, any case
+ * - missingPurpose: only expenses that still need a purpose
+ * - loansOnly: only money given or taken; person: only this person's
+ * - limit: at most this many
  */
 export async function listTransactions(db, filters = {}) {
   const {
@@ -62,62 +68,48 @@ export async function listTransactions(db, filters = {}) {
   } = filters;
   const where = [];
   const params = [];
+  const add = (condition, ...values) => {
+    where.push(condition);
+    params.push(...values);
+  };
 
   if (startMs != null && endMs != null) {
-    where.push('t.occurred_at >= ? AND t.occurred_at < ?');
-    params.push(startMs, endMs);
+    add('t.occurred_at >= ? AND t.occurred_at < ?', startMs, endMs);
   }
   if (categoryId != null) {
-    where.push('t.category_id = ?');
-    params.push(categoryId);
+    add('t.category_id = ?', categoryId);
   }
   const term = search?.trim().toLowerCase();
   if (term) {
-    // instr() does a plain substring match, so % and _ in the search are not wildcards.
-    where.push("(instr(lower(coalesce(t.purpose, '')), ?) > 0 OR instr(lower(coalesce(t.merchant, '')), ?) > 0)");
-    params.push(term, term);
+    // instr() is a plain text match, so % and _ in a search are not wildcards.
+    add("(instr(lower(coalesce(t.purpose, '')), ?) > 0 OR instr(lower(coalesce(t.merchant, '')), ?) > 0)", term, term);
   }
   if (missingPurpose) {
-    // Incoming money and loans do not need a purpose to be complete.
-    // Tea on a shop account is named by the shop, so it needs no purpose either.
-    where.push("t.purpose IS NULL AND t.direction = 'debit' AND t.loan_type IS NULL AND t.shop_entry IS NULL");
+    add(NEEDS_PURPOSE);
   }
   if (accountId != null) {
-    where.push('t.account_id = ?');
-    params.push(accountId);
+    add('t.account_id = ?', accountId);
   }
   if (paymentMethod != null) {
-    where.push('t.payment_method = ?');
-    params.push(paymentMethod);
+    add('t.payment_method = ?', paymentMethod);
   }
   if (direction != null) {
-    where.push('t.direction = ?');
-    params.push(direction);
+    add('t.direction = ?', direction);
   }
   if (loansOnly) {
-    where.push('t.loan_type IS NOT NULL');
+    add('t.loan_type IS NOT NULL');
   }
   if (person != null) {
-    where.push('lower(trim(t.merchant)) = lower(trim(?))');
-    params.push(person);
+    add('lower(trim(t.merchant)) = lower(trim(?))', person);
   }
-  // Payments to a shop account are not spending (the teas already were), so they are left out too.
-  if (kind === 'regular') {
-    where.push(`t.loan_type IS NULL AND ${NOT_SHOP_PAYMENT}`);
-  } else if (kind === 'paid' || kind === 'received') {
-    where.push(`t.loan_type IS NULL AND ${NOT_SHOP_PAYMENT} AND t.direction = ?`);
-    params.push(kind === 'paid' ? 'debit' : 'credit');
-  } else if (kind === 'given') {
-    where.push("t.loan_type IN ('lent', 'lent_repaid')");
-  } else if (kind === 'taken') {
-    where.push("t.loan_type IN ('borrowed', 'borrowed_repaid')");
+  if (KIND_FILTERS[kind]) {
+    add(...KIND_FILTERS[kind]);
   }
 
   const order = sort === 'asc' ? 'ASC' : 'DESC';
   let sql = `${SELECT_TRANSACTION}
     ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY t.occurred_at ${order}, t.id ${order}`;
-
   if (limit != null) {
     sql += ' LIMIT ?';
     params.push(limit);
@@ -129,10 +121,7 @@ export async function getTransaction(db, id) {
   return db.getFirstAsync(`${SELECT_TRANSACTION} WHERE t.id = ?`, [id]);
 }
 
-/**
- * `values` comes from validateTransactionForm. Returns the new transaction id.
- * direction defaults to 'debit' (money spent); 'credit' is money received.
- */
+/** Saves a new entry and returns its id. direction defaults to 'debit' (money paid). */
 export async function createTransaction(db, values) {
   const now = Date.now();
   const result = await db.runAsync(
@@ -164,6 +153,7 @@ export async function createTransaction(db, values) {
   return result.lastInsertRowId;
 }
 
+/** Saves changes to an entry. Its split and shop links are kept as they are. */
 export async function updateTransaction(db, id, values) {
   const result = await db.runAsync(
     `UPDATE transactions SET
@@ -193,115 +183,20 @@ export async function updateTransaction(db, id, values) {
 }
 
 /**
- * Saves one payment split into parts: `values` is your own share (an expense),
- * `parts` are the shares paid for other people, each saved as money given
- * ([{ merchant, amountPaise }]). Everything else (date, method, account,
- * reference) is copied from `values`. All parts share split_group = the id of
- * your share, so they can be found (and undone) together. All or nothing.
- * `loansCategoryId`: the "Loans" category for the given parts.
- * Returns the id of your share.
- */
-export async function createSplitPayment(db, values, parts, loansCategoryId) {
-  let firstId = null;
-  await db.withExclusiveTransactionAsync(async (txn) => {
-    firstId = await insertSplitPayment(txn, values, parts, loansCategoryId);
-  });
-  return firstId;
-}
-
-/** createSplitPayment without its own transaction, for callers already inside one. */
-export async function insertSplitPayment(txn, values, parts, loansCategoryId) {
-  const firstId = await createTransaction(txn, values);
-  await txn.runAsync('UPDATE transactions SET split_group = ? WHERE id = ?', [firstId, firstId]);
-  for (const part of parts) {
-    await createTransaction(txn, {
-      ...values,
-      amountPaise: part.amountPaise,
-      direction: 'debit',
-      loanType: 'lent',
-      categoryId: loansCategoryId,
-      merchant: part.merchant,
-      dueAt: null,
-      splitGroup: firstId,
-    });
-  }
-  return firstId;
-}
-
-/**
- * The parts of a split payment: every entry that shares the split group
- * (your share and the shares for other people), your share first.
- */
-export async function listSplitParts(db, splitGroup) {
-  return db.getAllAsync(
-    `SELECT id, amount_paise AS amountPaise, merchant, loan_type AS loanType
-     FROM transactions WHERE split_group = ? ORDER BY id`,
-    [splitGroup],
-  );
-}
-
-/**
- * A split is one payment, so what its parts share follows an edit of one
- * part: the date and time, how it was paid, the bank account and the UPI
- * reference. Amounts, names and categories stay each part's own.
- */
-export async function updateSplitShared(db, splitGroup, exceptId, values) {
-  await db.runAsync(
-    `UPDATE transactions SET occurred_at = ?, payment_method = ?, account_id = ?, reference = ?, updated_at = ?
-     WHERE split_group = ? AND id <> ?`,
-    [
-      values.occurredAt,
-      values.paymentMethod,
-      values.accountId ?? null,
-      values.reference,
-      Date.now(),
-      splitGroup,
-      exceptId,
-    ],
-  );
-}
-
-/**
  * Deletes entries together. A payment that came from a bank SMS goes back to
- * Review (waiting) instead of staying marked as added, so it can be reviewed
- * again and is not mistaken for a duplicate of something that no longer exists.
+ * Review, so it is not later mistaken for a duplicate of something deleted.
  */
 export async function deleteTransactions(db, ids) {
   if (ids.length === 0) {
     return;
   }
-  const marks = ids.map(() => '?').join(', ');
+  const list = placeholders(ids.length);
   await db.withExclusiveTransactionAsync(async (txn) => {
     await txn.runAsync(
       `UPDATE detected_payments SET status = 'pending', transaction_id = NULL
-       WHERE status = 'added' AND transaction_id IN (${marks})`,
+       WHERE status = 'added' AND transaction_id IN (${list})`,
       ids,
     );
-    await txn.runAsync(`DELETE FROM transactions WHERE id IN (${marks})`, ids);
+    await txn.runAsync(`DELETE FROM transactions WHERE id IN (${list})`, ids);
   });
-}
-
-/**
- * Renames a person on all their money given and taken entries (matched like
- * getLoanBalances: ignoring case and spaces at the ends). When the new name is
- * already someone else's, their entries end up together: that is a merge.
- * Expenses and income with the same name are not touched. Names remembered
- * from bank SMS follow too, so the next payment comes in under the new name.
- * Returns how many entries changed.
- */
-export async function renamePerson(db, oldName, newName) {
-  const name = newName.trim().replace(/\s+/g, ' ');
-  if (!name) {
-    throw new Error('Enter a name.');
-  }
-  const result = await db.runAsync(
-    `UPDATE transactions SET merchant = ?, updated_at = ?
-     WHERE loan_type IS NOT NULL AND lower(trim(merchant)) = lower(trim(?))`,
-    [name, Date.now(), oldName],
-  );
-  await db.runAsync(
-    'UPDATE name_memory SET merchant = ?, updated_at = ? WHERE lower(trim(merchant)) = lower(trim(?))',
-    [name, Date.now(), oldName],
-  );
-  return result.changes;
 }

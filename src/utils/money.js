@@ -61,6 +61,16 @@ export function formatINR(paise) {
   return `${sign}₹${rupees}.${remainder}`;
 }
 
+/** "₹40" for a whole amount, "₹40.50" otherwise: short enough for a button. */
+export function formatINRShort(paise) {
+  return formatINR(paise).replace(/\.00$/, '');
+}
+
+/** Like parseAmountToPaise, but an empty box is fine: { paise: null }. */
+export function parseOptionalAmount(input) {
+  return String(input ?? '').trim() === '' ? { paise: null } : parseAmountToPaise(input);
+}
+
 /** Average in whole paise, rounded to the nearest paisa. */
 export function averagePaise(totalPaise, count) {
   return count > 0 ? Math.round(totalPaise / count) : 0;
