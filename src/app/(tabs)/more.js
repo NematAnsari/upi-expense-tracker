@@ -6,7 +6,8 @@ import { useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Path } from 'react-native-svg';
+import { Path, Rect } from 'react-native-svg';
+import { useAppLock } from '../../components/AppLock';
 import { ICONS, OutlineIcon } from '../../components/icons';
 import { colors, fontSize, radius, spacing } from '../../constants/theme';
 import { countPendingDetected } from '../../db/detected';
@@ -31,6 +32,13 @@ const DRAW = {
   detection: (c) => <Path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2h16l-2-2zM10 21h4" stroke={c} {...STROKE} />,
   // A tray with a down arrow.
   backup: (c) => <Path d="M12 4v10M8 10l4 4 4-4M5 19h14" stroke={c} {...STROKE} />,
+  // A padlock.
+  lock: (c) => (
+    <>
+      <Rect x={5} y={10.5} width={14} height={10} rx={2} stroke={c} {...STROKE} />
+      <Path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" stroke={c} {...STROKE} />
+    </>
+  ),
 };
 
 // The rows under the Review banner, in order.
@@ -50,6 +58,8 @@ const ROWS = [
     subtitle: 'Save your data to a file, or bring it back',
     route: '/backup',
   },
+  // Its line says whether the lock is on (see lockSubtitle).
+  { key: 'lock', title: 'App lock', subtitle: '', route: '/app-lock' },
 ];
 
 export default function MoreScreen() {
@@ -58,6 +68,8 @@ export default function MoreScreen() {
   const loader = useCallback(async () => ({ pendingCount: await countPendingDetected(db) }), [db]);
   const { data } = useFocusQuery(loader);
 
+  const { enabled: lockOn } = useAppLock();
+  const lockSubtitle = lockOn ? 'On: asks for your fingerprint or phone PIN' : 'Off: open the app without unlocking';
   const waiting = data?.pendingCount ?? 0;
   const reviewSubtitle = waiting > 0 ? `${waiting} waiting for you` : 'All caught up';
 
@@ -95,7 +107,7 @@ export default function MoreScreen() {
               </View>
               <View style={styles.main}>
                 <Text style={styles.title}>{row.title}</Text>
-                <Text style={styles.subtitle}>{row.subtitle}</Text>
+                <Text style={styles.subtitle}>{row.key === 'lock' ? lockSubtitle : row.subtitle}</Text>
               </View>
               <Text style={styles.chevron}>›</Text>
             </Pressable>

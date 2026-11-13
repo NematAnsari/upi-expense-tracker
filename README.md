@@ -27,24 +27,22 @@ Android Studio is **not** needed. Builds run in the cloud with EAS Build.
 
 ```bash
 npm install
-npx expo start
+npm start
 ```
 
-Then open the **Expense Tracker** app on your phone (the development build) and scan the QR code.
-If the phone cannot connect, use `npx expo start --tunnel`.
+Then open **Expo Go** on your phone and type the `exp://...` address the command prints (the QR code does not
+work with this project). Expo Go has its own empty database, so your real data is never touched.
 
-> Expo Go can run most screens, but payment detection only works in this app's own build,
-> because it uses custom Android code.
+> Expo Go can show most screens, but payment detection, App lock and the nightly backup only work in this app's
+> own build, because they use native Android code. Use `npm run build` for that.
 
 ## Builds
 
-| Command             | What you get                                                         | Needs the PC running |
-| ------------------- | -------------------------------------------------------------------- | -------------------- |
-| `npm run build:dev` | Development build: loads code from your PC, changes appear instantly | Yes                  |
-| `npm run build:app` | Standalone app (APK): everything inside, works like a normal app     | No                   |
+`npm run build` makes the app you install and use (an APK, built in the cloud). Everything is inside it, so it
+works like a normal app without the PC.
 
 A new build is only needed when **native** code changes: files in `modules/`, packages with native code, or
-`app.json` plugins and permissions. JavaScript changes reload instantly in the development build.
+`app.json` plugins and permissions. To see JavaScript changes without a build, use `npm start` (Expo Go).
 
 Installing a new build: open the download link on the phone and tap **Update**.
 **Do not uninstall the old app first**: that deletes all saved transactions.
@@ -52,14 +50,11 @@ Installing a new build: open the download link on the phone and tap **Update**.
 ## Commands
 
 ```bash
-npm start              # start the dev server
-npm run start:go       # try screens in Expo Go (own empty database; detection does not work there)
-npm run start:go:tunnel  # same, when the phone cannot connect over Wi-Fi
-npm test               # run all tests (Node, no phone needed)
-npm run lint           # check code for problems
-npm run format         # format all code with Prettier
+npm start              # try the app in Expo Go (type the exp:// address it prints)
+npm test               # run all tests (no phone needed)
+npm run format         # tidy the code formatting
 npm run check          # lint + format check + tests (run before committing)
-npx expo-doctor        # check package versions match the Expo SDK
+npm run build          # build the app you install (install it with Update)
 ```
 
 ## Folder structure

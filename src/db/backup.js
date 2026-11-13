@@ -5,6 +5,7 @@
 
 import { INCOME, UNCATEGORIZED } from '../domain/categorize.js';
 import { LOANS_CATEGORY } from '../domain/loans.js';
+import { DEVICE_PREFIX } from './deviceSettings.js';
 import { LATEST_VERSION } from './migrations.js';
 
 const BACKUP_APP = 'upi-expense-tracker';
@@ -20,10 +21,14 @@ export async function buildBackup(db, now = Date.now()) {
   const version = await db.getFirstAsync('PRAGMA user_version');
   const tables = {};
   for (const table of TABLES) {
-    // Settings hold app state (like the last backup time), not your data.
+    // Left out: the last backup time, and settings that belong to this phone
+    // only (app lock, the automatic backup folder; see deviceSettings.js).
     tables[table] =
       table === 'settings'
-        ? await db.getAllAsync('SELECT * FROM settings WHERE key <> ?', [LAST_BACKUP_KEY])
+        ? await db.getAllAsync('SELECT * FROM settings WHERE key <> ? AND key NOT LIKE ?', [
+            LAST_BACKUP_KEY,
+            `${DEVICE_PREFIX}%`,
+          ])
         : await db.getAllAsync(`SELECT * FROM ${table}`);
   }
   return {
@@ -93,9 +98,10 @@ export async function restoreBackup(db, backup) {
     // Children before parents, so nothing is left pointing at a deleted row.
     await txn.runAsync('DELETE FROM detected_payments');
     for (const table of [...TABLES].reverse()) {
+      // This phone's own settings stay as they are through a restore.
       await txn.runAsync(
-        table === 'settings' ? 'DELETE FROM settings WHERE key <> ?' : `DELETE FROM ${table}`,
-        table === 'settings' ? [LAST_BACKUP_KEY] : [],
+        table === 'settings' ? 'DELETE FROM settings WHERE key <> ? AND key NOT LIKE ?' : `DELETE FROM ${table}`,
+        table === 'settings' ? [LAST_BACKUP_KEY, `${DEVICE_PREFIX}%`] : [],
       );
     }
     for (const table of TABLES) {
@@ -103,7 +109,7 @@ export async function restoreBackup(db, backup) {
       // database itself, never from the file, so they are safe in the SQL.
       const known = (await txn.getAllAsync(`PRAGMA table_info(${table})`)).map((column) => column.name);
       for (const row of backup.tables[table] ?? []) {
-        if (table === 'settings' && row.key === LAST_BACKUP_KEY) {
+        if (table === 'settings' && (row.key === LAST_BACKUP_KEY || String(row.key ?? '').startsWith(DEVICE_PREFIX))) {
           continue;
         }
         const columns = known.filter((name) => name in row);

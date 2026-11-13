@@ -1,16 +1,22 @@
 // Backup & restore: save all your data to a file you keep off the phone
 // (Google Drive, WhatsApp to yourself, email), and bring it back on this or a
 // new phone. Restoring replaces what is on the phone, so it asks first.
+// Automatic backup writes a file every day into a folder you pick once.
 
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { ErrorState, LoadingState } from '../components/States';
+import { TextLink } from '../components/TextLink';
 import { colors, fontSize, spacing } from '../constants/theme';
 import { checkBackup, countEntries, getLastBackupAt, restoreBackup } from '../db/backup';
+import { DEVICE_KEYS, getAutoBackupSettings, setDeviceSetting } from '../db/deviceSettings';
+import { AUTO_BACKUPS_KEPT } from '../domain/autoBackup';
 import { useFocusQuery } from '../hooks/useFocusQuery';
+import { folderLabel, pickBackupFolder, runAutoBackup } from '../services/autoBackup';
+import { syncAutoBackupTask } from '../services/autoBackupTask';
 import { clearSafetyCopy, pickBackup, readSafetyCopy, saveSafetyCopy, shareBackup } from '../services/backupFile';
 import { showMessage } from '../ui/notify';
 import { formatOrdinalDate, formatTime } from '../utils/dates';
@@ -27,6 +33,7 @@ export default function BackupScreen() {
       lastBackupAt: await getLastBackupAt(db),
       // What was on the phone before the last restore, if a restore was done.
       safetyCopy: await readSafetyCopy(),
+      auto: await getAutoBackupSettings(db),
     }),
     [db],
   );
@@ -98,6 +105,73 @@ export default function BackupScreen() {
     );
   }
 
+  /** Saves today's file straight away, so you see at once that the folder works. */
+  async function backUpNow(folder, doneMessage) {
+    const result = await runAutoBackup(db, folder);
+    if (result.ok) {
+      showMessage(doneMessage);
+    } else {
+      Alert.alert(
+        'Could not save to that folder',
+        `${result.error}
+
+Try choosing the folder again.`,
+      );
+    }
+  }
+
+  // Turning it on asks for a folder the first time.
+  async function toggleAutoBackup(on) {
+    setBusy(true);
+    try {
+      if (!on) {
+        await setDeviceSetting(db, DEVICE_KEYS.autoBackupOn, '');
+        await syncAutoBackupTask(false);
+        showMessage('Automatic backup is off');
+        return;
+      }
+      let folder = data.auto.folder;
+      if (!folder) {
+        folder = await pickBackupFolder();
+        if (!folder) {
+          return;
+        }
+        await setDeviceSetting(db, DEVICE_KEYS.autoBackupFolder, folder);
+      }
+      await setDeviceSetting(db, DEVICE_KEYS.autoBackupOn, '1');
+      await syncAutoBackupTask(true);
+      await backUpNow(folder, "Automatic backup is on. Today's file is saved.");
+    } catch (toggleError) {
+      console.error(toggleError);
+      Alert.alert('Could not change automatic backup', toggleError.message || 'Please try again.');
+    } finally {
+      setBusy(false);
+      reload();
+    }
+  }
+
+  async function changeFolder() {
+    setBusy(true);
+    try {
+      const folder = await pickBackupFolder();
+      if (!folder) {
+        return;
+      }
+      await setDeviceSetting(db, DEVICE_KEYS.autoBackupFolder, folder);
+      if (data.auto.on) {
+        await backUpNow(folder, "Folder changed. Today's file is saved there.");
+      } else {
+        showMessage('Folder chosen');
+      }
+    } catch (folderError) {
+      console.error(folderError);
+      Alert.alert('Could not use that folder', folderError.message || 'Please try again.');
+    } finally {
+      setBusy(false);
+      reload();
+    }
+  }
+
   function handleUndoRestore() {
     const copy = data.safetyCopy;
     const checked = checkBackup(copy);
@@ -136,6 +210,44 @@ export default function BackupScreen() {
         <Button label="Save backup file" onPress={handleSave} loading={busy} />
       </Card>
 
+      <Card title="Automatic backup">
+        <View style={styles.line}>
+          <View style={styles.flex}>
+            <Text style={styles.label}>Back up every day</Text>
+            <Text style={styles.note}>
+              Around midnight, when Android allows it (usually while the phone is idle or charging). If a night is
+              missed, it runs the next time you open the app.
+            </Text>
+          </View>
+          <Switch
+            value={data.auto.on}
+            onValueChange={toggleAutoBackup}
+            disabled={busy}
+            trackColor={{ true: colors.primary }}
+            accessibilityLabel="Back up every day"
+          />
+        </View>
+        <View style={[styles.line, styles.folderLine]}>
+          <Text style={[styles.flex, styles.folder]} numberOfLines={1}>
+            {data.auto.folder ? `Folder: ${folderLabel(data.auto.folder)}` : 'No folder chosen yet'}
+          </Text>
+          <TextLink
+            label={data.auto.folder ? 'Change folder' : 'Choose folder'}
+            onPress={changeFolder}
+            disabled={busy}
+          />
+        </View>
+        <Text style={styles.note}>
+          {data.auto.lastAt
+            ? `Last automatic backup: ${formatOrdinalDate(data.auto.lastAt)}, ${formatTime(data.auto.lastAt)}`
+            : 'No automatic backup yet.'}
+        </Text>
+        {data.auto.error ? <Text style={styles.error}>{`The last try failed: ${data.auto.error}`}</Text> : null}
+        <Text style={[styles.note, styles.gapTop]}>
+          {`Keeps the newest ${AUTO_BACKUPS_KEPT} daily files in that folder; other files there are never touched. Pick a folder that Google Drive or another app keeps in sync, so a copy also lives off the phone.`}
+        </Text>
+      </Card>
+
       <Card title="Restore from a backup">
         <Text style={styles.text}>
           Choose a backup file to bring your data back, for example on a new phone. Everything on this phone is replaced
@@ -165,4 +277,12 @@ const styles = StyleSheet.create({
   text: { fontSize: fontSize.md, color: colors.text, marginBottom: spacing.md },
   undo: { marginTop: spacing.lg },
   muted: { fontSize: fontSize.sm, color: colors.textMuted, marginBottom: spacing.md },
+  flex: { flex: 1 },
+  line: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  folderLine: { marginTop: spacing.md },
+  label: { fontSize: fontSize.md, fontWeight: '600', color: colors.text },
+  folder: { fontSize: fontSize.md, color: colors.text },
+  note: { fontSize: fontSize.sm, color: colors.textMuted },
+  gapTop: { marginTop: spacing.sm },
+  error: { fontSize: fontSize.sm, color: colors.danger, marginTop: spacing.xs },
 });

@@ -3,4 +3,7 @@ android/
 ios/
 dist/
 .expo/
+.claude/
 package-lock.json
+# Markdown is written by hand (tables, line breaks); Prettier would rewrap it.
+*.md

@@ -5,9 +5,9 @@ Everything about the app is defined here. When the app changes, this file change
 
 | | |
 | --- | --- |
-| Last updated | 2026-11-11 |
+| Last updated | 2026-11-13 |
 | Database schema version | 7 |
-| Automated tests | 118, all passing |
+| Automated tests | 122, all passing |
 | Platform | Android only |
 | Personal data | Not included here on purpose: no names, account numbers, project IDs or real messages |
 
@@ -38,7 +38,8 @@ An offline-first Android app for one person to track money in India.
 - Track **money given to and taken from people**, kept apart from spending and income.
 - Keep a running account with a **shop where you take now and pay later** (for example tea paid monthly).
 - See monthly totals, spending by category and a comparison with last month.
-- **Back up** everything to a file and restore it.
+- **Back up** everything to a file and restore it, by hand or automatically every day.
+- **Lock the app** with the phone's own fingerprint, face, PIN or pattern.
 - All data stays on the phone in SQLite. There is no server, no account and no upload.
 
 ## 3. Wording rules
@@ -71,7 +72,8 @@ Amounts are always colored: money paid is **red**, money received is **green**. 
 | Opened from More | Payment detection | Notification access, battery and alert settings, recent bank messages |
 | Opened from More | Bank accounts | Rename accounts found in bank SMS, add your own |
 | Opened from More | Shop accounts, Statement | Take now, pay later accounts (`shops.js`, `shop/[id].js`) |
-| Opened from More | Backup & restore | Save everything to a file, bring it back (`backup.js`) |
+| Opened from More | Backup & restore | Save everything to a file, bring it back, automatic daily backup (`backup.js`) |
+| Opened from More | App lock | Switch the lock on or off (`app-lock.js`) |
 
 The four tabs use thin outline icons with a small label below. The Given & Taken title bar has an info button that explains why those totals are kept apart.
 
@@ -79,7 +81,7 @@ The four tabs use thin outline icons with a small label below. The Given & Taken
 
 From top to bottom:
 
-1. **Month selector** (see 4.12).
+1. **Month selector** (see 4.13).
 2. **Two tiles, Spent and Received.** Each shows the month's total, a small grey count pill, and a **+** to add. In the current month the last line is "Today ₹x" with a pill for today's count, or "Nothing today". Past months leave that line blank.
 3. **To-do card** (only when something needs you), up to four lines in this order:
    - "Payments to review (N)", first because those are not counted until added.
@@ -260,8 +262,29 @@ More > Backup & restore.
 - A backup from an older database version restores with defaults for new columns, and the built-in categories it lacks (Income, Uncategorized, Loans) are added, so money given or taken can still be saved. A backup from a newer version is refused, and so is a file with no categories (it is treated as damaged).
 - The file is **not encrypted or password protected**. The screen says so.
 - Format: `{ app: 'upi-expense-tracker', format: 1, schemaVersion, createdAt, tables: {...} }`. Code: `src/db/backup.js`, `src/services/backupFile.js`.
+- Settings that belong to this phone only (the App lock switch and the automatic backup folder, keys starting with `device_`) are never written into a backup file, and a restore leaves them as they are.
 
-### 4.12 Small interface behavior
+**Automatic backup** (a card on the same screen; off until you switch it on)
+- **Back up every day:** the first time you switch it on, Android's folder picker opens. Pick a folder once, ideally one that Google Drive or another app keeps in sync, so a copy also lives off the phone. Android remembers the permission. Today's file is saved straight away, so you can see the folder works.
+- **When it runs:** around midnight, through Android's background work (`expo-background-task`, asked for about once a day). **Android decides the exact time**: usually at night while the phone is idle or charging, and a phone maker's battery saver can skip it. If a day was missed, the backup runs the next time you open the app. So at most one day can be missed, never more.
+- **Files:** one per day, `expense-auto-backup-YYYY-MM-DD.json` (a second run the same day replaces it). The newest **7** are kept; older automatic files are removed. Other files in the folder, including backups you saved by hand, are never touched.
+- The card shows the folder, the last automatic backup time, and the reason if the last try failed (for example the folder was deleted). **Change folder** picks another one.
+- A successful automatic backup also counts as "last backup", so the Expenses reminder stays quiet.
+- Code: `src/services/autoBackup.js` (writing and cleaning up), `src/services/autoBackupTask.js` (the nightly task, defined from the entry file `index.js` so Android can run it without opening a screen), `src/domain/autoBackup.js` (the rules), `src/db/deviceSettings.js`.
+
+### 4.12 App lock
+
+More > App lock. One switch, **off** until you turn it on.
+
+- Uses the **phone's own unlock**: fingerprint, face, PIN, pattern or password. There is no separate app PIN to remember or forget. Anyone who can unlock the phone can also open the app.
+- **When it asks:** when the app opens, and when you come back after being away for **1 minute** or more. The screens stay loaded underneath, so you return to where you were.
+- **The lock screen:** a padlock, "Expense Tracker is locked" and an **Unlock** button. The phone's prompt opens by itself; if you cancel it, tap Unlock to try again.
+- **Turning it on or off** asks you to confirm with the phone's unlock first. It cannot be turned on when the phone has no screen lock; the app says to set one in the phone's settings.
+- The More tab's App lock row says whether it is on.
+- It protects the app on this phone only. A backup file is separate and has no password.
+- Code: `src/components/AppLock.js` (`AppLockProvider`, wrapped around all screens in `_layout.js`), `src/app/app-lock.js`. Package: `expo-local-authentication`.
+
+### 4.13 Small interface behavior
 
 - **Month selector:** a calendar-style tile with the month and year, round arrows, and a month name you can tap to open a **month grid** (year arrows, 12 months, "Go to this month"). You cannot go past the current month.
 - **Keyboard:** Android draws apps edge to edge, so the screen no longer shrinks when the keyboard opens. `react-native-keyboard-controller` keeps the box you type in above the keyboard on the form, the person page, Bank accounts, Review payments and Shop accounts. The form's Save bar rides on top of the keyboard.
@@ -306,7 +329,7 @@ Migrations run in `SQLiteProvider` `onInit`, tracked with `PRAGMA user_version`.
 | --- | --- | --- |
 | `categories` | Default and custom categories | `name` (unique, ignores case), `is_default`, `sort_order` |
 | `transactions` | Every saved entry | `amount_paise` (> 0), `direction`, `purpose`, `category_id`, `occurred_at`, `payment_method`, `merchant` (name), `reference`, `notes`, `source` (manual or notification), `account_id`, `loan_type`, `due_at`, `split_group`, `shop_account_id`, `shop_entry` |
-| `settings` | Key and value (for example the last backup time) | `key`, `value` |
+| `settings` | Key and value (for example the last backup time). Keys starting with `device_` belong to this phone only and are left out of backups | `key`, `value` |
 | `templates` | Quick-add entries (amount optional) | `name`, `amount_paise`, `category_id`, `use_count`, `last_used_at` |
 | `accounts` | Bank accounts found in messages | `bank_name`, `last4` (unique together), `nickname` |
 | `detected_payments` | One row per captured notification | `capture_id` (unique), `source_package`, `raw_text`, parsed fields, `status`, `possible_duplicate`, `transaction_id` |
@@ -351,6 +374,8 @@ Upgrading never loses data, and an upgrade cannot be undone. Save a backup befor
 | Keyboard | `react-native-keyboard-controller` | 1.22.7 |
 | Date and time input | `@react-native-community/datetimepicker` | 9.2.1 |
 | Backup | `expo-file-system`, `expo-sharing`, `expo-document-picker` | ~58.0.13, ~58.0.22, ~58.0.4 |
+| Automatic backup | `expo-background-task`, `expo-task-manager` (config plugin `expo-background-task` in app.json) | ~58.0.12, ~58.0.13 |
+| App lock | `expo-local-authentication` | ~58.0.2 |
 | Native code | Local Expo module in Kotlin (`modules/upi-notification-listener`) | |
 | Builds | EAS Build in the cloud. `development` (dev client APK) and `preview` (standalone APK) | |
 | Tests | Node test runner with `node:sqlite`, through an adapter that mimics the expo-sqlite API | Node 22.13+ or 24.3+ (`.nvmrc` says 24) |
@@ -425,12 +450,12 @@ The JS side loads it with `requireOptionalNativeModule`, so the app still runs w
 - No bank passwords, UPI PINs, OTPs or full account numbers are stored. Only the last 4 digits of an account.
 - The listener service is protected by `BIND_NOTIFICATION_LISTENER_SERVICE`, so only Android can bind to it.
 - "Share masked" on a captured message hides account numbers, UPI IDs and references. It cannot detect names, and the UI says so.
-- **Not encrypted:** the database, and the backup file, can be read by anyone who can unlock the phone or has the file. There is no app lock.
+- **Not encrypted:** the database, and the backup file, can be read by anyone who has the file or a copy of the phone's storage. App lock (4.12) keeps people out of the app itself, using the phone's own unlock.
 - Test files use made-up sample messages only.
 
 ## 11. Testing
 
-`npm test` runs **118 tests** (Node test runner, no phone needed). They use only made-up data.
+`npm test` runs **122 tests** (Node test runner, no phone needed). They use only made-up data.
 
 | File | Covers |
 | --- | --- |
@@ -442,6 +467,7 @@ The JS side loads it with `requireOptionalNativeModule`, so the app still runs w
 | `repeats` | Grouping repeat purchases |
 | `newFeatures` | Split payments, remembered names, return by, backup and restore, audit fixes |
 | `shopAccounts` | The diary rule, spending exclusions, shop payments from bank SMS, backup of shop accounts |
+| `protection` | Automatic backup rules (one a day, file names, keeping the newest 7, never touching other files), this phone's settings kept out of backups and kept through a restore |
 | `moreFixes` | Shop accounts that cannot go below zero, editing and removing a shop account, Undo keeping an edit, split parts staying together, the version 7 name cleanup |
 | `gapFixes` | Deleting a bank payment, editing or deleting money given or taken, the hidden Loans category, split duplicates and split delete, names, restoring an old backup, Add all stopping partway |
 
@@ -451,18 +477,28 @@ Commands: `npm run check` runs lint, format check and tests. `npx expo export --
 
 | Command | Result |
 | --- | --- |
-| `npm start` | Dev server for the development build |
-| `npm run start:go` or `start:go:tunnel` | Try screens in Expo Go |
-| `npm run build:dev` | Cloud build of the development client APK |
-| `npm run build:app` | Cloud build of the standalone APK (what is used day to day) |
+| `npm start` | Try the app in Expo Go, over a tunnel (type the `exp://` address it prints) |
+| `npm test` | All tests, no phone needed (`node --no-warnings --test` finds every `*.test.js`) |
+| `npm run format` | Tidy formatting of all code and JSON files with Prettier (Markdown is left as written; see `.prettierignore`) |
 | `npm run check` | Lint, format check and tests (run before finishing any change) |
+| `npm run build` | Cloud build of the standalone APK (the app used day to day) |
+
+Rarely needed, so typed in full instead of kept as scripts:
+
+| Command | Result |
+| --- | --- |
+| `npx expo lint` | Lint only |
 | `npx expo-doctor` | Checks package versions against the SDK |
+| `npx expo start` | Dev server for the development build |
+| `npx eas-cli@latest build --profile development --platform android` | Cloud build of the development client APK |
+
+Scripts were simplified on 2026-11-13 from 11 to 5. Old names: `start:go:tunnel` is now `start`, `build:app` is now `build`.
 
 **Windows note:** put Node 24 first on the path before running project commands, for example in PowerShell `$env:Path = "C:\Users\<you>\AppData\Local\nvm\v24.22.1;" + $env:Path`. Other projects on the same PC may use another Node version.
 
 **Installing a build:** open the download link on the phone and tap **Update**. **Never uninstall first**, because that deletes all data. Save a backup (More > Backup & restore) before updating.
 
-**Expo Go** is for looking at screens. It has its own empty database and no payment detection. To open it, type the `exp://` address by hand in Expo Go (the QR code does not work with this project, because the development client is also installed). Expo's own documents disagree on whether Expo Go includes `react-native-keyboard-controller`, so check keyboard behavior in the real build.
+**Expo Go** is for looking at screens. It has its own empty database and no payment detection. To open it, type the `exp://` address by hand in Expo Go (the QR code does not work with this project, because the development client is also installed). Expo's own documents disagree on whether Expo Go includes `react-native-keyboard-controller`, so check keyboard behavior in the real build. App lock and the nightly backup also need the real build to test properly: Expo Go has its own database, and Android only runs background work for the installed app.
 
 **Troubleshooting**
 - *"Cannot find native module 'ExpoSQLite'"*: the app that opened the project does not have the SQLite part. Open the address in Expo Go itself, not in another app, and close any old dev server (a second server may be running on port 8081).
@@ -494,7 +530,8 @@ Other limits:
 - Android battery management can still stop the listener despite the reconnect logic.
 - A typo in a name creates a separate person (the "Same person as...?" hint and Rename help).
 - The backup file has no password. Categories and templates cannot be renamed, merged or removed. Return by dates do not send a reminder notification.
-- No dark mode, no app lock, no crash reporting (by design, no network). Accessibility labels exist on main controls but are not audited.
+- The nightly automatic backup runs when Android allows it, not at an exact minute; opening the app catches up.
+- No dark mode, no crash reporting (by design, no network). Accessibility labels exist on main controls but are not audited.
 - `LICENSE` is still the Expo template's file and needs a decision.
 
 ## 14. Decisions
@@ -512,7 +549,7 @@ Other limits:
 | A delete or edit cannot make a person inconsistent | Money received back or returned may never be more than what there was to receive or return at that time. A person who was already inconsistent can still be edited, so old data is never locked |
 | Deleting a bank payment un-adds it | The payment returns to Review payments instead of staying marked as added |
 
-Ideas not built (put on hold by the owner): app lock with fingerprint or PIN; manage categories (rename, merge, hide, delete) and templates; warn on a manual entry that matches a recent payment; reminder notification for Return by dates; repeating entries (rent, subscriptions); budget per category; CSV export; "Add" inside the payment alert; a year view in Reports; dark mode; a password on the backup file.
+Ideas not built (put on hold by the owner): manage categories (rename, merge, hide, delete) and templates; warn on a manual entry that matches a recent payment; reminder notification for Return by dates; repeating entries (rent, subscriptions); budget per category; CSV export; "Add" inside the payment alert; a year view in Reports; dark mode; a password on the backup file.
 
 ## 15. Change log
 
@@ -528,6 +565,8 @@ Ideas not built (put on hold by the owner): app lock with fingerprint or PIN; ma
 | 2026-11-11 | Audit fixes (return by from an old round, remembered names on rename and edit); shop accounts (schema 6) and their redesign; small spends built then removed; More tab redesigned ("Review first"); this documentation |
 | 2026-11-11 | Fixed the nine gaps from the code review: deleting a bank payment returns it to Review; editing or deleting money given or taken is checked against money received back; Loans never suggested for expenses; split payments compared by total for duplicates and deleted as a whole on request; search boxes stay while they have text; names saved with single spaces; old backups restore the built-in categories; Add all keeps Undo when it stops partway (113 tests) |
 | 2026-11-11 | Second round of fixes: shop accounts cannot go below zero and can be edited or removed; a date can be picked when adding or paying at a shop; Review details keeps the bank payment's direction; Undo keeps an edited entry; split parts share date and payment details on edit; a copy is kept before a restore, with "Undo last restore"; reminders on Expenses for a quiet bank SMS reader and an old backup; old names with extra spaces joined (schema 7); Expo patch updates (118 tests) |
+| 2026-11-13 | App lock with the phone's own unlock (locks after 1 minute away); automatic daily backup to a folder you pick, around midnight when Android allows, caught up on the next open, newest 7 files kept; this phone's settings kept out of backups (122 tests) |
+| 2026-11-13 | npm scripts cut from 11 to 5: `start` (Expo Go over a tunnel), `test`, `format`, `check`, `build`. Rare commands are listed in section 12 instead |
 
 ## 16. Suggested review focus
 
