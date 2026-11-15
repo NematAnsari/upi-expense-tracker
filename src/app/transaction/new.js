@@ -16,6 +16,7 @@ import { isValidLoanType, LOAN_TYPES, takesDueDate } from '../../domain/entryTyp
 import { applyTemplate, emptyTransactionForm } from '../../domain/transactionForm';
 import { formatINR, paiseToInputString } from '../../utils/money';
 import { showMessage } from '../../utils/notify';
+import { paymentSourceText } from '../../utils/sourceApps';
 
 /** The short message after saving. */
 function savedMessage(values, split) {
@@ -69,6 +70,7 @@ export default function NewTransactionScreen() {
         paymentMethod: 'UPI',
         merchant: detected.counterparty ?? '',
         reference: detected.reference ?? '',
+        sourceText: paymentSourceText(detected.sourcePackage, detected.accountBank),
       };
       return { categories, templates, accounts, knownPeople, initialValues };
     }

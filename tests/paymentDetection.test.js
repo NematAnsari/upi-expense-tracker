@@ -398,3 +398,77 @@ test('a failure on one item keeps it queued for retry', async () => {
     ['bad'],
   );
 });
+
+test('source: a detected payment says where it came from; you can type or change your own', async () => {
+  const { db } = await createTestDatabase();
+  await syncCapturedNotifications(
+    db,
+    fakeSource([
+      captured('a', 'JD-KOTAKB-S', KOTAK_CREDIT),
+      { ...captured('b', 'Google Pay', BOI_DEBIT), packageName: 'com.google.android.apps.nbu.paisa.user' },
+    ]),
+  );
+  const categories = await listCategories(db);
+  const pending = await listPendingDetected(db, categories);
+  for (const item of pending) {
+    await addDetectedAsTransaction(db, item.id, detectedToTransaction(item, item.suggestedCategoryId));
+  }
+  const saved = await listTransactions(db);
+  const credit = saved.find((t) => t.direction === 'credit');
+  const debit = saved.find((t) => t.direction === 'debit');
+  assert.match(credit.sourceText, /^SMS · Kotak/);
+  assert.match(debit.sourceText, /^Google Pay · /);
+
+  // Typed by hand, then changed.
+  const id = await createTransaction(db, {
+    amountPaise: 1000,
+    direction: 'credit',
+    categoryId: categories[0].id,
+    occurredAt: posted,
+    paymentMethod: 'Cash',
+    sourceText: 'Salary',
+    purpose: null,
+    merchant: null,
+    reference: null,
+    notes: null,
+  });
+  assert.equal((await listTransactions(db)).find((t) => t.id === id).sourceText, 'Salary');
+});
+
+test('upgrading to version 8 fills in the source of payments already added from a notification', async () => {
+  const raw = new DatabaseSync(':memory:');
+  const db = wrapDatabase(raw);
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    for (const migrate of MIGRATIONS.slice(0, 7)) {
+      await migrate(txn);
+    }
+    await txn.execAsync('PRAGMA user_version = 7');
+  });
+  const now = Date.now();
+  await db.runAsync(
+    "INSERT INTO accounts (bank_name, last4, nickname, created_at) VALUES ('Kotak Mahindra Bank', '1111', 'Kotak', ?)",
+    [now],
+  );
+  const category = await db.getFirstAsync('SELECT id FROM categories LIMIT 1');
+  const added = await db.runAsync(
+    `INSERT INTO transactions (amount_paise, direction, category_id, occurred_at, payment_method, source, created_at, updated_at)
+     VALUES (500, 'credit', ?, ?, 'UPI', 'notification', ?, ?)`,
+    [category.id, now, now, now],
+  );
+  const byHand = await db.runAsync(
+    `INSERT INTO transactions (amount_paise, direction, category_id, occurred_at, payment_method, created_at, updated_at)
+     VALUES (700, 'debit', ?, ?, 'Cash', ?, ?)`,
+    [category.id, now, now, now],
+  );
+  await db.runAsync(
+    `INSERT INTO detected_payments (capture_id, source_package, raw_text, posted_at, account_id, status, transaction_id, created_at)
+     VALUES ('x', 'com.google.android.apps.messaging', 'text', ?, 1, 'added', ?, ?)`,
+    [now, added.lastInsertRowId, now],
+  );
+
+  await migrateDbIfNeeded(db);
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, LATEST_VERSION);
+  const sourceOf = (id) => raw.prepare('SELECT source_text FROM transactions WHERE id = ?').get(id).source_text;
+  assert.equal(sourceOf(added.lastInsertRowId), 'SMS · Kotak Mahindra Bank');
+  assert.equal(sourceOf(byHand.lastInsertRowId), null, 'entries added by hand stay empty');
+});

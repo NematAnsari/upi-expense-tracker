@@ -47,18 +47,20 @@ export async function listSplitParts(db, splitGroup) {
 
 /**
  * After one part is edited, copies what all parts share to the others: date
- * and time, payment method, bank account and UPI reference. Amounts, names
- * and categories stay each part's own.
+ * and time, payment method, bank account, UPI reference and source. Amounts,
+ * names and categories stay each part's own.
  */
 export async function updateSplitShared(db, splitGroup, exceptId, values) {
   await db.runAsync(
-    `UPDATE transactions SET occurred_at = ?, payment_method = ?, account_id = ?, reference = ?, updated_at = ?
+    `UPDATE transactions SET occurred_at = ?, payment_method = ?, account_id = ?, reference = ?, source_text = ?,
+       updated_at = ?
      WHERE split_group = ? AND id <> ?`,
     [
       values.occurredAt,
       values.paymentMethod,
       values.accountId ?? null,
       values.reference,
+      values.sourceText ?? null,
       Date.now(),
       splitGroup,
       exceptId,

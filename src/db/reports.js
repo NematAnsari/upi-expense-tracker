@@ -1,7 +1,7 @@
 // Spending and income totals for the Expenses and Reports tabs. Money given
 // or taken and shop payments are never counted (see IS_SPENDING in sql.js).
 
-import { getDayRange, getMonthRange, getWeeksOfMonth, shiftMonth } from '../utils/dates.js';
+import { getDayKey, getDayRange, getMonthRange, getWeeksOfMonth, shiftMonth } from '../utils/dates.js';
 import { averagePaise, percentOf } from '../utils/money.js';
 import { IS_INCOME, IS_SPENDING, NEEDS_PURPOSE } from './sql.js';
 import { SELECT_TRANSACTION } from './transactions.js';
@@ -67,6 +67,60 @@ async function getWeeklyTotals(db, monthKey) {
       count: inWeek.length,
     };
   });
+}
+
+/** Which of the four day totals an entry adds to, or null (returns, shop payments). */
+function dayKindOf(row) {
+  if (row.loanType === 'lent') {
+    return 'given';
+  }
+  if (row.loanType === 'borrowed') {
+    return 'taken';
+  }
+  if (row.loanType != null || row.shopEntry === 'payment') {
+    return null;
+  }
+  return row.direction === 'debit' ? 'spent' : 'received';
+}
+
+const EMPTY_TOTAL = { paise: 0, count: 0 };
+
+/**
+ * Every day of a month, first to last, with what was spent, received, given
+ * and taken that day: [{ dayKey, day, startMs, spent, received, given, taken }],
+ * each total { paise, count }. Money received back or returned is not counted.
+ */
+export async function getDailyTotals(db, monthKey) {
+  const { startMs, endMs } = getMonthRange(monthKey);
+  const rows = await db.getAllAsync(
+    `SELECT t.amount_paise AS amountPaise, t.occurred_at AS occurredAt, t.direction,
+            t.loan_type AS loanType, t.shop_entry AS shopEntry
+     FROM transactions t WHERE ${IN_RANGE}`,
+    [startMs, endMs],
+  );
+  const days = [];
+  const byKey = new Map();
+  for (let date = new Date(startMs); date.getTime() < endMs; date.setDate(date.getDate() + 1)) {
+    const day = {
+      dayKey: getDayKey(date.getTime()),
+      day: date.getDate(),
+      startMs: date.getTime(),
+      spent: EMPTY_TOTAL,
+      received: EMPTY_TOTAL,
+      given: EMPTY_TOTAL,
+      taken: EMPTY_TOTAL,
+    };
+    days.push(day);
+    byKey.set(day.dayKey, day);
+  }
+  for (const row of rows) {
+    const kind = dayKindOf(row);
+    const day = byKey.get(getDayKey(row.occurredAt));
+    if (kind && day) {
+      day[kind] = { paise: day[kind].paise + row.amountPaise, count: day[kind].count + 1 };
+    }
+  }
+  return days;
 }
 
 async function countMissingPurpose(db, startMs, endMs) {

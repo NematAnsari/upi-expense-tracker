@@ -15,6 +15,14 @@ const UPI_APPS = {
   'in.amazon.mShop.android.shopping': 'Amazon Pay',
 };
 
+/**
+ * The Source an entry gets from a detected payment: the app the notification
+ * came from and the bank, "SMS · Kotak Mahindra Bank" or "Google Pay".
+ */
+export function paymentSourceText(packageName, bankName) {
+  return [sourceAppName(packageName) ?? 'Notification', bankName].filter(Boolean).join(' · ');
+}
+
 export function sourceAppName(packageName) {
   if (!packageName) {
     return null;

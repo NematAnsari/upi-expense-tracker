@@ -109,6 +109,7 @@ export default function EditTransactionScreen() {
         merchant: transaction.merchant ?? '',
         reference: transaction.reference ?? '',
         notes: transaction.notes ?? '',
+        sourceText: transaction.sourceText ?? '',
       }}
       submitLabel="Save changes"
       onSubmit={handleSubmit}

@@ -6,8 +6,8 @@ Everything about the app is defined here. When the app changes, this file change
 | | |
 | --- | --- |
 | Last updated | 2026-11-13 |
-| Database schema version | 7 |
-| Automated tests | 128, all passing |
+| Database schema version | 8 |
+| Automated tests | 131, all passing |
 | Platform | Android only |
 | Personal data | Not included here on purpose: no names, account numbers, project IDs or real messages |
 
@@ -63,7 +63,7 @@ Amounts are always colored: money paid is **red**, money received is **green**. 
 | --- | --- | --- |
 | Tab | **Expenses** | This month's spending and income, to-do reminders, shop accounts, the list |
 | Tab | **Given & Taken** | People you gave money to or took money from |
-| Tab | **Reports** | One month at a glance: total, ring chart by category |
+| Tab | **Reports** | Month: total, ring chart by category. Day by day: a calendar of spent, received, given and taken |
 | Tab | **More** | Review payments and the less frequent screens |
 | Opened from tabs | Add / Edit transaction | The form (`transaction/new.js`, `transaction/[id].js`) |
 | Opened from tabs | History | Every expense and income entry, any month, with filters |
@@ -109,7 +109,7 @@ Order on the form:
    The screen title follows the choice ("Add Expense", "Money Given", "Edit Shop Payment"...).
 4. **Category**, a row of icons to scroll and tap, with **+ New**. Hidden for money given or taken (saved under the hidden "Loans" category) and for shop payments.
 5. **Details card:** name (Paid to whom? / Received from whom? / Person's name), What for? (Note for given or taken), and **Return by** for I gave or I took. Past names and purposes appear as suggestion chips; picking one can fill an empty category. For people, "Same person as Rahul Kumar?" appears when a similar name exists.
-6. **More details card** (always open): payment method (UPI, Cash, Card, Other), bank account (+ New), date and time as two pills (future dates are blocked), UPI reference, notes.
+6. **More details card** (always open): payment method (UPI, Cash, Card, Other), bank account (+ New), date and time as two pills (future dates are blocked), UPI reference, **Source** (where the money came from or went; typed by you, or filled in for a payment from a notification as the app and the bank, for example "SMS · Kotak Mahindra Bank" or "Google Pay · Bank of India", which you can still change; kept the same on every part of a split), notes.
 7. **Save as template** (Add, Paid only) and **Delete** (Edit only).
 8. A **Save bar** fixed at the bottom. It rides on top of the keyboard.
 
@@ -222,12 +222,13 @@ Items taken need no purpose, so they never appear under "Need a purpose".
 
 ### 4.9 Reports
 
-One month at a glance, built to be understood quickly.
+A switch at the top picks **Month** (one month at a glance, built to be understood quickly) or **Day by day**.
 
 - **Month card:** "Spent in November", the total (large), the change from last month ("▲ ₹2,000 more than Oct" in red, "▼ ... less" in green, "Same as Oct", or "Nothing spent in Oct to compare"), a **ring** of spending by category (top five plus a grey "Other categories"; nothing is written inside it), a two-column legend with each name and %, then "Received ₹x · N expenses".
 - **Where it went:** every category with its color dot, expense count, amount and %. Tap one to see its entries in History for that month.
 - **Given & Taken:** one card with Money to receive and Money to return as full-width lines and a "View all ›" link (shown only when there are people). All time, never part of spending or income.
 - With no expenses in the month, an empty state explains how to add one.
+- **Day by day:** pick **Spent**, **Received**, **Given** or **Taken**. The month total for that choice and its entry count show on top, then the month as a calendar (weeks start on Sunday). Each day with money shows a short amount (₹950, ₹1.2k, ₹1.5L) on a teal tile; bigger days are a deeper teal. Tap a day to see all four of its totals (only the ones that are not zero). Spent and Received follow the money rules (section 5); Given and Taken count new money given or taken only, not money received back or returned. Changing the month clears the tapped day. Code: `getDailyTotals` in `src/db/reports.js`, `src/components/sections/DayCalendar.js`.
 
 The ring colors were checked for color-blind safety, and every slice is also named with its percentage.
 
@@ -322,14 +323,14 @@ Other rules:
 - **SQL** uses `?` placeholders only. Multi-step writes use `withExclusiveTransactionAsync`.
 - **Spending queries** share one definition (`IS_SPENDING`, `IS_INCOME` and `NOT_SHOP_PAYMENT` in `src/db/sql.js`). A new kind of entry must be added there, or it will be counted wrongly.
 
-## 6. Data model (SQLite, schema version 7)
+## 6. Data model (SQLite, schema version 8)
 
 Migrations run in `SQLiteProvider` `onInit`, tracked with `PRAGMA user_version`. Each step runs in its own transaction. **Shipped migrations are never edited**; changes are appended as a new one.
 
 | Table | Purpose | Main columns |
 | --- | --- | --- |
 | `categories` | Default and custom categories | `name` (unique, ignores case), `is_default`, `sort_order` |
-| `transactions` | Every saved entry | `amount_paise` (> 0), `direction`, `purpose`, `category_id`, `occurred_at`, `payment_method`, `merchant` (name), `reference`, `notes`, `source` (manual or notification), `account_id`, `loan_type`, `due_at`, `split_group`, `shop_account_id`, `shop_entry` |
+| `transactions` | Every saved entry | `amount_paise` (> 0), `direction`, `purpose`, `category_id`, `occurred_at`, `payment_method`, `merchant` (name), `reference`, `notes`, `source` (manual or notification), `source_text` (the Source shown on the form), `account_id`, `loan_type`, `due_at`, `split_group`, `shop_account_id`, `shop_entry` |
 | `settings` | Key and value (for example the last backup time). Keys starting with `device_` belong to this phone only and are left out of backups | `key`, `value` |
 | `templates` | Quick-add entries (amount optional) | `name`, `amount_paise`, `category_id`, `use_count`, `last_used_at` |
 | `accounts` | Bank accounts found in messages | `bank_name`, `last4` (unique together), `nickname` |
@@ -358,6 +359,7 @@ Version history:
 | 5 | `due_at`, `split_group`, and the `name_memory` table |
 | 6 | `shop_accounts`, `shop_account_id` and `shop_entry`, and `name_memory.shop_account_id` |
 | 7 | No new columns: names saved with extra spaces inside are made single-spaced, so one person no longer shows as two |
+| 8 | `transactions.source_text`. Entries already added from a notification get it filled in (app and bank) |
 
 Upgrading never loses data, and an upgrade cannot be undone. Save a backup before installing an update that includes a new version.
 
@@ -485,7 +487,7 @@ The JS side loads it with `requireOptionalNativeModule`, so the app still runs w
 
 ## 11. Testing
 
-`npm test` runs **128 tests** (Node test runner, no phone needed). They use only made-up data.
+`npm test` runs **131 tests** (Node test runner, no phone needed). They use only made-up data.
 
 | File | Covers |
 | --- | --- |
@@ -602,6 +604,8 @@ Ideas not built (put on hold by the owner): manage categories (rename, merge, hi
 | 2026-11-13 | New shop account hint now says "Pending amount at the shop today..." instead of a sentence with "owe" (wording rule, section 3) |
 | 2026-11-13 | App icon (white wallet with ₹ on the app teal, picked from 6 designs) and a teal splash screen that stays until the database is open, then fades out |
 | 2026-11-13 | Fixed: the app closed with "keeps stopping" on open. The crash log (adb) showed Android's background work library (used by the nightly backup) missing a part that the release build's code shrinking (R8, on by default in SDK 58) had removed. Keep rules added through `expo-build-properties`. Expo packages also updated to matching patch versions |
+| 2026-11-13 | Reports: "Day by day" calendar (picked design 4 of 5) for Spent, Received, Given and Taken per day, behind a Month | Day by day switch (129 tests) |
+| 2026-11-13 | Source field on the form (More details), filled in for detected payments as app and bank; schema 8 fills it in for payments already added (131 tests) |
 
 ## 16. Suggested review focus
 

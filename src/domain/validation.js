@@ -89,6 +89,7 @@ export function validateTransactionForm(form, now = Date.now()) {
       merchant: optionalName(form.merchant),
       reference: optionalText(form.reference),
       notes: optionalText(form.notes),
+      sourceText: optionalText(form.sourceText),
     },
   };
 }

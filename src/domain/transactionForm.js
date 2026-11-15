@@ -23,6 +23,8 @@ export function emptyTransactionForm(lastPaymentMethod) {
     merchant: '',
     reference: '',
     notes: '',
+    // Where the money came from or went: typed, or filled in from a detected payment.
+    sourceText: '',
   };
 }
 

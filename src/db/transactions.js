@@ -16,6 +16,7 @@ export const SELECT_TRANSACTION = `
     t.merchant,
     t.reference,
     t.notes,
+    t.source_text AS sourceText,
     t.account_id AS accountId,
     a.nickname AS accountName,
     t.loan_type AS loanType,
@@ -127,8 +128,9 @@ export async function createTransaction(db, values) {
   const result = await db.runAsync(
     `INSERT INTO transactions
       (amount_paise, direction, purpose, category_id, occurred_at, payment_method, merchant, reference, notes,
-       account_id, loan_type, due_at, split_group, shop_account_id, shop_entry, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       account_id, loan_type, due_at, split_group, shop_account_id, shop_entry, source, source_text, created_at,
+       updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       values.amountPaise,
       values.direction ?? 'debit',
@@ -146,6 +148,7 @@ export async function createTransaction(db, values) {
       values.shopAccountId ?? null,
       values.shopEntry ?? null,
       values.source ?? 'manual',
+      values.sourceText ?? null,
       now,
       now,
     ],
@@ -158,7 +161,8 @@ export async function updateTransaction(db, id, values) {
   const result = await db.runAsync(
     `UPDATE transactions SET
       amount_paise = ?, direction = ?, purpose = ?, category_id = ?, occurred_at = ?, payment_method = ?,
-      merchant = ?, reference = ?, notes = ?, account_id = ?, loan_type = ?, due_at = ?, updated_at = ?
+      merchant = ?, reference = ?, notes = ?, source_text = ?, account_id = ?, loan_type = ?, due_at = ?,
+      updated_at = ?
      WHERE id = ?`,
     [
       values.amountPaise,
@@ -170,6 +174,7 @@ export async function updateTransaction(db, id, values) {
       values.merchant,
       values.reference,
       values.notes,
+      values.sourceText ?? null,
       values.accountId ?? null,
       values.loanType ?? null,
       values.dueAt ?? null,

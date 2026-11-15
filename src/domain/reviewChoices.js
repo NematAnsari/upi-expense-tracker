@@ -5,6 +5,7 @@
 import { maxReturnPaise, remainingText } from './people.js';
 import { shopPaymentValues } from './shopAccounts.js';
 import { categoryIdForSave } from './transactionForm.js';
+import { paymentSourceText } from '../utils/sourceApps.js';
 
 /** The entry a bank payment becomes on Add. loanType when you chose I gave, Returned and so on. */
 export function detectedToTransaction(detected, categoryId, loanType = null) {
@@ -21,6 +22,7 @@ export function detectedToTransaction(detected, categoryId, loanType = null) {
     reference: detected.reference,
     notes: null,
     source: 'notification',
+    sourceText: paymentSourceText(detected.sourcePackage, detected.accountBank),
   };
 }
 

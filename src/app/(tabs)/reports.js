@@ -1,4 +1,5 @@
-// Reports tab: one month at a glance.
+// Reports tab. Month: one month at a glance. Day by day: a calendar of what was
+// spent, received, given or taken each day (see DayCalendar).
 //   Month card: "Spent in November", the total and the change from last month
 //   on top; a ring of spending by category below, with each slice's name and %
 //   in two columns under it; then the money received.
@@ -14,12 +15,14 @@ import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Amount } from '../../components/basics/Amount';
 import { Card } from '../../components/basics/Card';
+import { SegmentedControl } from '../../components/basics/SegmentedControl';
+import { DAY_KIND_OPTIONS, DayCalendar, DayKindTotal } from '../../components/sections/DayCalendar';
 import { CategoryRing, ringSlices, shortPercent } from '../../components/sections/CategoryRing';
 import { MonthSelector } from '../../components/sections/MonthSelector';
 import { EmptyState, ErrorState, LoadingState } from '../../components/basics/ScreenStates';
 import { TextLink } from '../../components/basics/TextLink';
 import { chartOtherColor, colors, fontSize, spacing } from '../../constants/theme';
-import { getMonthlyReport } from '../../db/reports';
+import { getDailyTotals, getMonthlyReport } from '../../db/reports';
 import { BALANCE_TEXT } from '../../domain/people';
 import { useFocusQuery } from '../../hooks/useFocusQuery';
 import { formatMonthLabel, getMonthKey, MONTH_NAMES, parseMonthKey } from '../../utils/dates';
@@ -101,14 +104,27 @@ function CategoryLine({ category, color, percent, onPress }) {
   );
 }
 
+const VIEWS = [
+  { value: 'month', label: 'Month' },
+  { value: 'days', label: 'Day by day' },
+];
+
 export default function ReportsScreen() {
   const db = useSQLiteContext();
   const router = useRouter();
   const [monthKey, setMonthKey] = useState(getMonthKey);
+  const [view, setView] = useState('month');
+  const [dayKind, setDayKind] = useState('spent');
+  // The tapped day in the calendar (its start time), or null.
+  const [pickedDay, setPickedDay] = useState(null);
 
   const loader = useCallback(async () => {
-    const [monthly, balances] = await Promise.all([getMonthlyReport(db, monthKey), getPeopleBalances(db)]);
-    return { ...monthly, balances };
+    const [monthly, balances, days] = await Promise.all([
+      getMonthlyReport(db, monthKey),
+      getPeopleBalances(db),
+      getDailyTotals(db, monthKey),
+    ]);
+    return { ...monthly, balances, days };
   }, [db, monthKey]);
   const { data: report, error, reload } = useFocusQuery(loader);
 
@@ -118,6 +134,21 @@ export default function ReportsScreen() {
       pathname: '/history',
       params: { filter: 'category', categoryId, month: monthKey, at: Date.now() },
     });
+  }
+
+  function changeMonth(nextMonthKey) {
+    setMonthKey(nextMonthKey);
+    setPickedDay(null);
+  }
+
+  function renderDays() {
+    return (
+      <>
+        <SegmentedControl options={DAY_KIND_OPTIONS} value={dayKind} onChange={setDayKind} small />
+        <DayKindTotal days={report.days} kind={dayKind} />
+        <DayCalendar days={report.days} kind={dayKind} selected={pickedDay} onSelect={setPickedDay} />
+      </>
+    );
   }
 
   function renderMonth() {
@@ -181,12 +212,15 @@ export default function ReportsScreen() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <MonthSelector monthKey={monthKey} onChange={setMonthKey} />
+      <SegmentedControl options={VIEWS} value={view} onChange={setView} />
+      <MonthSelector monthKey={monthKey} onChange={changeMonth} />
 
       {error ? <ErrorState onRetry={reload} /> : null}
       {!report && !error ? <LoadingState /> : null}
 
-      {report ? (
+      {report && view === 'days' ? renderDays() : null}
+
+      {report && view === 'month' ? (
         <>
           {report.count === 0 ? (
             <EmptyState

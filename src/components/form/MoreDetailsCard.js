@@ -115,8 +115,9 @@ function DateTimeLine({ value, onChange, error }) {
  *   (bank)  Bank account     BOI ••1111 ›    tap: None + your accounts + "+ New"
  *   (cal)   Date & time   [1 Nov] [3:05 PM]  each opens Android's picker
  *   (#)     UPI reference          Optional
+ *   (msg)   Source                 Optional, filled in for a detected payment
  *   (note)  Notes                  Optional
- * values: { paymentMethod, accountId, occurredAt, reference, notes }.
+ * values: { paymentMethod, accountId, occurredAt, reference, sourceText, notes }.
  * onChange(field, value) updates one of them. errors: { paymentMethod, occurredAt }.
  * onCreateAccount(name) saves a new account and returns it (or throws with a
  * message); it is then selected.
@@ -219,6 +220,14 @@ export function MoreDetailsCard({ values, onChange, accounts = [], onCreateAccou
         placeholder="Optional"
         maxLength={60}
         autoCapitalize="none"
+      />
+      <InputLine
+        icon="envelope"
+        label="Source"
+        value={values.sourceText}
+        onChange={(text) => onChange('sourceText', text)}
+        placeholder="Optional"
+        maxLength={60}
       />
       <InputLine
         icon="notes"

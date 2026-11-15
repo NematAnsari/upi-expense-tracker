@@ -1,4 +1,5 @@
 import { DEFAULT_CATEGORIES } from '../constants/categories.js';
+import { paymentSourceText } from '../utils/sourceApps.js';
 
 export const DATABASE_NAME = 'expenses.db';
 
@@ -196,6 +197,24 @@ export const MIGRATIONS = [
       UPDATE transactions SET merchant = ${collapse('merchant')} WHERE merchant LIKE '%  %';
       UPDATE name_memory SET merchant = ${collapse('merchant')} WHERE merchant LIKE '%  %';
     `);
+  },
+
+  // Version 8: a Source you can type on any entry. Entries already added from
+  // a detected payment get theirs filled in: the app and the bank.
+  async (db) => {
+    await db.execAsync('ALTER TABLE transactions ADD COLUMN source_text TEXT;');
+    const rows = await db.getAllAsync(
+      `SELECT d.transaction_id AS id, d.source_package AS packageName, a.bank_name AS bankName
+       FROM detected_payments d
+       LEFT JOIN accounts a ON a.id = d.account_id
+       WHERE d.status = 'added' AND d.transaction_id IS NOT NULL`,
+    );
+    for (const row of rows) {
+      await db.runAsync('UPDATE transactions SET source_text = ? WHERE id = ?', [
+        paymentSourceText(row.packageName, row.bankName),
+        row.id,
+      ]);
+    }
   },
 ];
 

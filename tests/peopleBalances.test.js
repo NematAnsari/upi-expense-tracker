@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { listCategories } from '../src/db/categories.js';
 import { LATEST_VERSION, MIGRATIONS, migrateDbIfNeeded } from '../src/db/migrations.js';
-import { getDashboardData, getMonthlyReport } from '../src/db/reports.js';
+import { getDailyTotals, getDashboardData, getMonthlyReport } from '../src/db/reports.js';
 import { createTransaction, listTransactions } from '../src/db/transactions.js';
 import { balanceParts, balanceStatus, personLists, returnTypeFor } from '../src/domain/people.js';
 import { activityFor, categoryIdForSave, pickableCategories } from '../src/domain/transactionForm.js';
@@ -250,4 +250,27 @@ test('people names come in the balances order: newest first, settled last', asyn
     names,
     people.map((p) => p.person),
   );
+});
+
+test('day by day: spent, received, given and taken add up per day; returns are left out', async () => {
+  const { db, add } = await setup();
+  await add(30000, 'debit', { category: 'Food & Dining', day: 2 }); // spent ₹300 on the 2nd
+  await add(12000, 'debit', { category: 'Food & Dining', day: 2 }); // and ₹120 more
+  await add(100000, 'credit', { category: 'Income', day: 2 }); // received ₹1,000
+  await add(50000, 'debit', { loanType: 'lent', merchant: 'Ravi', day: 3 }); // gave ₹500 on the 3rd
+  await add(20000, 'credit', { loanType: 'borrowed', merchant: 'Amit', day: 3 }); // took ₹200
+  await add(10000, 'credit', { loanType: 'lent_repaid', merchant: 'Ravi', day: 4 }); // money back: not counted
+
+  const days = await getDailyTotals(db, '2026-10');
+  assert.equal(days.length, 31, 'every day of October');
+  assert.deepEqual(days.map((d) => d.day).slice(0, 3), [1, 2, 3]);
+  const second = days[1];
+  assert.deepEqual(second.spent, { paise: 42000, count: 2 });
+  assert.deepEqual(second.received, { paise: 100000, count: 1 });
+  assert.deepEqual(days[2].given, { paise: 50000, count: 1 });
+  assert.deepEqual(days[2].taken, { paise: 20000, count: 1 });
+  const fourth = days[3];
+  for (const kind of ['spent', 'received', 'given', 'taken']) {
+    assert.equal(fourth[kind].paise, 0, `${kind} on the 4th`);
+  }
 });

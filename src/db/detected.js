@@ -21,6 +21,7 @@ const SELECT_DETECTED = `
     d.amount_paise AS amountPaise,
     d.account_id AS accountId,
     a.nickname AS accountName,
+    a.bank_name AS accountBank,
     d.counterparty,
     d.reference,
     d.status,
