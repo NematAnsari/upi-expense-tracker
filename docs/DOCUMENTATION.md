@@ -555,7 +555,7 @@ Scripts were simplified on 2026-11-13 from 11 to 5. Old names: `start:go:tunnel`
 
 A second round the same day fixed what was listed here as possible: Review details can no longer turn a bank payment around, Undo keeps an edited entry, the backup screen no longer claims a backup was saved, and shop accounts cannot go below zero.
 
-**Not yet seen on a phone:** everything added since 2026-11-04 passes automated tests and bundles, but has not been checked on a device. The automated tests do not cover how screens look or behave.
+**Checked on a phone (2026-11-15):** the build with the crash fix opens and runs. Features added after it (Day by day in Reports, the Source field, schema 8) pass automated tests and bundle, but need the next build to be checked on the phone. The automated tests do not cover how screens look or behave.
 
 Other limits:
 - Bank sender IDs and formats for most of the 39 banks follow common published formats and are **not verified** with real messages. Kotak debit and BoB messages still need real samples.
